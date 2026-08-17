@@ -25,7 +25,11 @@ Anthropic 代理的 WebFetch 工具查资料，没法真正跑起来验证。
 
 ## 文件说明
 - `index.html` —— 完整 Demo（数据模拟、三套图表引擎、副图指标切换、主题、响应式布局、诊断日志全在这一个文件里）
+- `demo_kc.html` —— 方案一 klinecharts 单库 Demo
+- `demo_ec.html` —— 方案二 ECharts 单库 Demo
+- `demo_lw.html` —— 方案三 Lightweight Charts 单库 Demo
 - `K线逐根回放技术选型方案.docx` —— 配套技术方案文档（对比表格、指标切换难度评分、踩坑记录、已知限制、下一步建议），后续会持续更新
+- `三技术方案选型评审报告-v1.0.docx` —— 针对上述三个单库 Demo 的选型评审报告
 
 ## 当前已知问题（需要在本地用真实网络复验）
 1. **klinecharts 反复加载失败**：已定位并修复过一次 CDN 路径问题（v10 正确路径是
