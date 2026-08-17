@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>K线逐根回放训练 · 方案三 Lightweight Charts</title>
+<style>
+  :root{
+    --up:#F5222D; --down:#16A34A; --neutral:#888888;
+    --bg:#f4f5f7; --panel:#ffffff; --panel-2:#fafbfc; --border:#e3e5ec;
+    --text:#1f2430; --text-dim:#8b90a5; --accent:#2f6fed;
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; background:var(--bg); color:var(--text); font-size:13px; }
+
+  .topbar{
+    display:flex; align-items:center; gap:2px; padding:6px 12px; background:var(--panel);
+    border-bottom:1px solid var(--border); overflow-x:auto; white-space:nowrap;
+  }
+  .topbar button{
+    border:none; background:transparent; color:var(--text-dim); font-size:12.5px; padding:5px 9px;
+    border-radius:4px; cursor:pointer;
+  }
+  .topbar button:hover{ background:var(--panel-2); }
+  .topbar button.active{ background:#eaf1ff; color:var(--accent); font-weight:600; }
+  .topbar .sep{ width:1px; align-self:stretch; background:var(--border); margin:0 4px; }
+  .topbar .spacer{ flex:1 1 auto; }
+  .topbar .scheme-badge{
+    font-size:11px; color:#fff; background:var(--accent); padding:3px 9px; border-radius:999px; font-weight:600;
+  }
+
+  .stock-header{
+    display:flex; align-items:baseline; gap:14px; padding:10px 14px 6px; background:var(--panel);
+    border-bottom:1px solid var(--border); flex-wrap:wrap;
+  }
+  .stock-header .code{ font-size:13px; color:var(--text-dim); }
+  .stock-header .name{ font-size:17px; font-weight:700; }
+  .stock-header .price{ font-size:22px; font-weight:700; }
+  .stock-header .change{ font-size:13px; font-weight:600; }
+  .up-color{ color:var(--up); } .down-color{ color:var(--down); }
+  .stock-header .ma-legend{ font-size:12px; color:var(--text-dim); margin-left:auto; }
+  .stock-header .ma-legend span{ margin-right:10px; }
+
+  .main-layout{ display:flex; gap:10px; padding:10px; align-items:flex-start; }
+  .chart-column{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .side-panel{ flex:0 0 220px; }
+  @media (max-width: 860px){
+    /* round2修复的真实bug（用户反馈"没考虑屏幕自适应"）：.main-layout在桌面宽屏下用
+       align-items:flex-start是为了让左右两栏各自按内容高度对齐、互不强制拉伸等高；
+       但切到竖排（flex-direction:column）之后，flex-start在纵向flex容器里控制的是
+       横向（交叉轴）对齐，副作用是子元素不再拉伸满宽，而是收缩成"内容多宽就多宽"。
+       这里显式把交叉轴对齐改回stretch，让竖排下的两栏都拉伸满宽。 */
+    .main-layout{ flex-direction:column; align-items:stretch; }
+    .side-panel{ flex:1 1 auto; width:100%; }
+    .chart-column{ width:100%; }
+  }
+
+  .chart-block{ background:var(--panel); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .chart-block-label{
+    font-size:11.5px; color:var(--text-dim); padding:3px 10px; background:var(--panel-2);
+    border-bottom:1px solid var(--border); display:flex; gap:10px; flex-wrap:wrap;
+  }
+  .chart-block-label b{ color:var(--text); font-weight:600; }
+  /* Lightweight Charts是三个方案里唯一原生支持"一个chart实例、内部多个pane"的——
+     所以这里和klinecharts/ECharts那两版demo不一样：不是"每个指标一个独立带标题栏的卡片"，
+     而是K线主图+VOL+MACD+BOLL+成交额+（可选）KDJ全部长在同一个chart容器里，pane之间
+     由库自己画分隔线。round2修复后：高度不再用 pane.setHeight(px) 手动摆布（连续调用会
+     互相挤占、且setHeight(0)并不会真正归零），而是用"懒加载创建/彻底removeSeries"来控制
+     一个pane到底存不存在，配合 pane.setStretchFactor() 做相对比例分配。这是它的技术特点，
+     不是偷懒少做——具体对比写在页面底部的技术方案说明里。 */
+  #mainPane{ height:560px; width:100%; }
+  @media (max-width:640px){ #mainPane{ height:440px; } }
+
+  .key-data-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px;
+  }
+  .key-data-card h4{ margin:0 0 8px; font-size:12.5px; color:var(--text-dim); font-weight:600; }
+  .key-data-grid{ display:grid; grid-template-columns:1fr 1fr; gap:6px 8px; }
+  .key-data-grid .kd-item{ display:flex; flex-direction:column; }
+  .key-data-grid .kd-label{ font-size:10.5px; color:var(--text-dim); }
+  .key-data-grid .kd-value{ font-size:12.5px; font-weight:600; }
+  .key-data-note{ font-size:10.5px; color:var(--text-dim); margin-top:8px; line-height:1.5; }
+
+  .progress-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px; margin-top:8px;
+  }
+  .progress-card .bar{ height:6px; background:var(--panel-2); border-radius:999px; overflow:hidden; margin:6px 0; }
+  .progress-card .bar-fill{ height:100%; background:var(--accent); width:0%; transition:width .2s; }
+  .progress-card .stat-row{ display:flex; justify-content:space-between; font-size:11.5px; color:var(--text-dim); }
+
+  .trade-log-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px; margin-top:8px;
+    max-height:180px; overflow:auto;
+  }
+  .trade-log-card h4{ margin:0 0 6px; font-size:12.5px; color:var(--text-dim); font-weight:600; }
+  .trade-log-item{ font-size:11.5px; padding:3px 0; border-bottom:1px dashed var(--border); }
+  .trade-log-item:last-child{ border-bottom:none; }
+  .trade-log-item .tag{ display:inline-block; padding:0 5px; border-radius:3px; font-size:10.5px; font-weight:700; margin-right:4px; }
+  .trade-log-item .tag.buy{ background:#fdecec; color:var(--up); }
+  .trade-log-item .tag.sell{ background:#e8f7ee; color:var(--down); }
+  .trade-log-item .tag.hold{ background:#eef0f5; color:var(--text-dim); }
+
+  .bottom-bar{
+    display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--panel);
+    border-top:1px solid var(--border); flex-wrap:wrap;
+  }
+  .indicator-toggles{ display:flex; gap:6px; flex-wrap:wrap; }
+  .ind-toggle{
+    border:1px solid var(--border); background:var(--panel-2); color:var(--text-dim); font-size:11.5px;
+    padding:5px 10px; border-radius:5px; cursor:pointer;
+  }
+  .ind-toggle.on{ background:#eaf1ff; color:var(--accent); border-color:var(--accent); font-weight:600; }
+  .bottom-bar .spacer{ flex:1 1 auto; }
+  .trade-buttons{ display:flex; gap:8px; }
+  .trade-btn{
+    border:none; border-radius:6px; padding:10px 22px; font-size:14px; font-weight:700; cursor:pointer;
+    color:#fff;
+  }
+  .trade-btn.buy{ background:var(--up); }
+  .trade-btn.sell{ background:var(--down); }
+  .trade-btn.hold{ background:#6b7280; }
+  .trade-btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+  .modal-mask{
+    position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:50;
+  }
+  .modal-mask.show{ display:flex; }
+  .modal-box{ background:#fff; border-radius:10px; padding:18px 20px; width:260px; box-shadow:0 12px 32px rgba(0,0,0,.2); }
+  .modal-box h4{ margin:0 0 12px; font-size:15px; }
+  .modal-box label{ font-size:12px; color:var(--text-dim); display:block; margin-bottom:4px; }
+  .modal-box input{ width:100%; padding:7px 9px; border:1px solid var(--border); border-radius:6px; font-size:14px; }
+  .modal-box .modal-price{ font-size:11.5px; color:var(--text-dim); margin-top:6px; }
+  .modal-actions{ display:flex; gap:8px; margin-top:16px; }
+  .modal-actions button{ flex:1; padding:8px 0; border-radius:6px; border:none; font-size:13px; font-weight:600; cursor:pointer; }
+  .modal-actions .confirm{ background:var(--accent); color:#fff; }
+  .modal-actions .cancel{ background:var(--panel-2); color:var(--text-dim); }
+
+  .diag{
+    margin:0 14px 10px; font-size:11px; max-height:110px; overflow:auto; background:var(--panel-2);
+    border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text-dim);
+  }
+  .diag .err{ color:#c0392b; }
+  .diag .ok{ color:var(--down); }
+
+  .tech-notes{ margin:0 14px 24px; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px 18px; font-size:13px; line-height:1.7; }
+  .tech-notes h3{ font-size:14.5px; margin:16px 0 6px; }
+  .tech-notes h3:first-child{ margin-top:0; }
+  .tech-notes table{ width:100%; border-collapse:collapse; font-size:12.5px; margin-top:6px; table-layout:fixed; }
+  .tech-notes th, .tech-notes td{ border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:break-word; }
+  .tech-notes th{ background:var(--panel-2); }
+  .tech-notes code{ word-break:break-all; }
+  .stat-highlight{ display:inline-block; background:#eaf1ff; color:var(--accent); padding:2px 8px; border-radius:5px; font-weight:700; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <button class="active" data-period="day">日K</button>
+  <button data-period="week">周K</button>
+  <button data-period="month">月线</button>
+  <div class="sep"></div>
+  <button data-period="m1">1分</button>
+  <button data-period="m5">5分</button>
+  <button data-period="m15">15分</button>
+  <button data-period="m30">30分</button>
+  <button data-period="m60">60分</button>
+  <div class="spacer"></div>
+  <span class="scheme-badge">方案三 · Lightweight Charts</span>
+</div>
+
+<div class="stock-header">
+  <span class="code">SIM001</span>
+  <span class="name">模拟测试股</span>
+  <span class="price" id="curPrice">--</span>
+  <span class="change" id="curChange">--</span>
+  <span class="ma-legend" id="maLegend">MA5:-- MA10:-- MA20:-- MA60:--</span>
+</div>
+
+<div class="main-layout">
+  <div class="chart-column">
+    <div class="chart-block">
+      <div class="chart-block-label">
+        <span><b>K线主图</b></span><span id="ohlcLabel"></span>
+        <span style="margin-left:auto;">成交量 / MACD(12,26,9) / BOLL(20,2) / 成交额 —— 均为同一chart实例内的原生pane</span>
+      </div>
+      <div id="mainPane"></div>
+    </div>
+  </div>
+
+  <div class="side-panel">
+    <div class="key-data-card">
+      <h4>关键数据（模拟）</h4>
+      <div class="key-data-grid" id="keyDataGrid"></div>
+      <div class="key-data-note">以上均为本地模拟数据，仅用于界面结构演示，不对应任何真实标的或真实行情。</div>
+    </div>
+    <div class="progress-card">
+      <h4 style="margin:0 0 6px; font-size:12.5px; color:var(--text-dim); font-weight:600;">回放进度</h4>
+      <div class="bar"><div class="bar-fill" id="progressFill"></div></div>
+      <div class="stat-row"><span>已显示 <b id="shownCount">0</b> 根</span><span id="remainCount">剩余 --</span></div>
+    </div>
+    <div class="trade-log-card">
+      <h4>操作记录（本地模拟，不做真实持仓/盈亏计算）</h4>
+      <div id="tradeLog"></div>
+    </div>
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <div class="indicator-toggles" id="indicatorToggles"></div>
+  <div class="spacer"></div>
+  <div class="trade-buttons">
+    <button class="trade-btn buy" id="buyBtn">买</button>
+    <button class="trade-btn sell" id="sellBtn">卖</button>
+    <button class="trade-btn hold" id="holdBtn">持有</button>
+  </div>
+</div>
+
+<div class="diag" id="diag">诊断日志：等待初始化...</div>
+
+<div class="modal-mask" id="tradeModal">
+  <div class="modal-box">
+    <h4 id="modalTitle">买入</h4>
+    <label>数量（股）</label>
+    <input type="number" id="tradeQty" value="100" min="1" step="100"/>
+    <div class="modal-price" id="modalPriceHint"></div>
+    <div class="modal-actions">
+      <button class="cancel" id="modalCancel">取消</button>
+      <button class="confirm" id="modalConfirm">确认</button>
+    </div>
+  </div>
+</div>
+
+<div class="tech-notes" id="techNotes">
+  <h3>技术方案说明（Lightweight Charts）</h3>
+  <p>顶部周期栏、股票信息头、右侧精简版关键数据卡片、底部指标开关和"买/卖/持有"按钮，和另外两个方案保持一致。但K线主图这一块的界面结构和demo_kc.html / demo_ec.html不一样——这是刻意的，不是偷懒：Lightweight Charts是三个方案里唯一原生支持"一个chart实例、内部多个pane"的（v5起），所以这里没有像另外两个方案那样把成交量/MACD/BOLL/成交额拆成各自独立带标题栏的卡片，而是K线主图 + VOL + MACD + BOLL + 成交额 + （可选）KDJ全部长在同一个chart容器里，pane之间由库自己画分隔线，高度用<code>chart.panes()[i].setHeight()</code>统一控制。这正好是这个库的技术特点——一个实例管全部子图，不用像ECharts那样拆多个实例再手动同步，也不用像klinecharts那样一个个createIndicator。</p>
+  <p>和demo_ec.html一样，Lightweight Charts零内置金融指标，MA/MACD/BOLL/KDJ的计算公式和demo_ec.html完全同一套（复制过来的，两边算出来的数字应该一致，可以用来交叉验证）。指标"显示/隐藏"这次用的是"把对应pane的高度收成0"这种简化做法，不是真的调用移除pane的API——官方其实提供了这个能力，但要多写一层"pane索引重新映射"的状态管理代码，这次为了控制复杂度先用收起高度的写法，效果上等同于隐藏，缺点是收起后原来的pane位置还占着一条0高度的边界，不算完全"消失"。K线用<code>upColor:'transparent', borderVisible:true, borderUpColor/borderDownColor</code>做"涨（红）空心、跌（绿）实心"；MACD按参考截图的经典样式（HistogramSeries柱状 + DIF/DEA两条LineSeries），不是上一版demo里改过的细线版。"买/卖/持有"三个按钮行为和另外两个方案完全一致：持有直接推进一根（走<code>series.update()</code>增量更新），买/卖先弹窗输数量再推进，只记录不做真实持仓/盈亏计算。</p>
+
+  <h3>实现统计（诚实自查，非事后美化）</h3>
+  <table>
+    <tr><th>指标</th><th>数值</th><th>说明</th></tr>
+    <tr><td>首次认为实现完成的用时</td><td><span class="stat-highlight">2分18秒</span></td><td>从开始写这个文件到功能自认为齐全的时间点，未经测试验证。</td></tr>
+    <tr><td>从首次完成到交付前发现并修复的bug数</td><td><span class="stat-highlight">1个</span></td><td>头部"MA5/MA10/MA20/MA60"图例是静态占位文本，从来没有被JS更新过——三个方案统一自查时发现的同一类问题，已一并修复。单独针对本方案的Playwright测试（多pane高度切换+买卖持有流程+resize+一路推进到底不越界）本身没有额外发现别的bug。</td></tr>
+    <tr><td>总实现耗时（第一轮）</td><td><span class="stat-highlight">约5分</span></td><td>从开始写这个文件到最终确认交付的总时长。三个方案里耗时最短，主要是数据层公式和demo_ec.html完全复用，省掉了重新设计的时间。</td></tr>
+  </table>
+
+  <h3>第二轮修复记录（你用真实网络/真实库在自己机器上测试后反馈的问题）</h3>
+  <p>三个文件里这一个的第一轮bug最"隐蔽"——不是完全不渲染，而是渲染出来但布局是乱的，比第一轮Playwright stub能测出来的问题更深一层（stub里的<code>pane.setHeight()</code>假实现只是"存个数字"，不会复现真实库内部的高度再分配算法，所以测不出来）。</p>
+  <table>
+    <tr><th>问题来源</th><th>问题描述</th><th>根因 & 修复方式</th></tr>
+    <tr><td>你实机测试发现</td><td>三个按钮和整体显示正常，但副图指标显示乱套，底部还多出一条不明的波浪细纹</td><td>查了官方源码定位到两个坑：① 上一版demo在初始化时就把全部指标（含默认关闭的KDJ）的series都建好了，靠反复调用<code>pane.setHeight(0)</code>/<code>setHeight(68)</code>切换显示/隐藏——但<code>setHeight()</code>内部是"从其它pane身上抠高度补给目标pane"的相对再分配算法（源码<code>chart-model.ts</code>的<code>changePanesHeight</code>），连续对多个pane分别调用会互相干扰、越调越乱；② <code>setHeight(0)</code>并不是真的0，官方有<code>MIN_PANE_HEIGHT=30px</code>的下限，传0会被强制clamp成30px——所以"隐藏"的KDJ其实一直以30px高度显示着内容，这正是页面下方多出来的那条不明纹路的真正原因。修复：改成官方推荐的方式——默认收起的指标压根不在初始化时创建对应series，用户点开关时才动态<code>addSeries()</code>；关闭时用<code>chart.removeSeries()</code>把该指标的全部series摘掉，一个pane只要没有任何series就会被自动判定为空pane并从<code>panes()</code>里剔除，不再需要手动管理"pane到底该多高"；相对宽高改用<code>pane.setStretchFactor()</code>而不是绝对像素高度。同时给<code>pushOneBarLwc()</code>/<code>loadInitial()</code>的每一条<code>update()</code>/<code>setData()</code>都加上了"这个series现在是否存在"的判断，避免指标关闭后series已被移除、但推进K线时还想调用它导致直接抛异常。</td></tr>
+    <tr><td>我自己复查发现（非你直接反馈）</td><td>窄屏（&lt;860px）下主图列没有真正撑满屏幕宽度</td><td>根因和demo_kc.html / demo_ec.html一样：<code>.main-layout</code>竖排后<code>align-items:flex-start</code>让子元素收缩到内容宽度。修复：<code>@media(max-width:860px)</code>里把<code>align-items</code>改回<code>stretch</code>，<code>.chart-column</code>补<code>width:100%</code>。</td></tr>
+    <tr><td>验证方式</td><td colspan="2">重写了Playwright stub：现在<code>removeSeries()</code>会真的把series标记为"已移除"，之后如果代码还对它调用<code>update()</code>/<code>setData()</code>会直接抛"use-after-free"错误——用来暴露"指标关闭后还在更新一个不存在的series"这类round2修复前才会踩的真实bug模式；同时统计<code>setHeight()</code>调用次数（期望全程为0）和<code>setStretchFactor()</code>调用次数；另外加了跨3个断点的响应式测试。</td></tr>
+    <tr><td>我自己复查又发现的第2个问题（非你反馈，写这份技术说明表格本身引入的）</td><td colspan="2">给三个文件补写这份round2说明表格时，表格里塞了不少长英文/代码片段，没设置<code>word-break</code>，在375px手机宽度下把表格撑破导致页面横向溢出——写完文本后重新跑了一遍响应式测试才测出来，用<code>table-layout:fixed</code> + <code>overflow-wrap</code>/<code>word-break</code>修复。</td></tr>
+    <tr><td>本轮（含研究+3个文件的架构修复+响应式修复+两次测试）总耗时</td><td colspan="2"><span class="stat-highlight">约22分20秒</span>——三个文件问题是交叉研究、交叉修复的，没法精确拆到单个文件头上，如实按整体耗时报告；这个文件本身的架构改动（懒加载series+removeSeries）是这一轮三个文件里改动量最大的一个。</td></tr>
+  </table>
+
+  <h3>第三轮补充：预防性CDN版本锁定（非你直接反馈的bug）</h3>
+  <p>demo_kc.html那边你反馈"chart.setDataLoader is not a function"，定位到根因是CDN源没锁精确版本号，解析到了缺方法的版本。顺手检查发现这个文件的Lightweight Charts CDN源同样只锁了大版本号（<code>lightweight-charts@5</code>），存在一样的版本漂移风险——你测这个文件时图表本身显示是正常的（问题出在指标pane管理上，不是加载问题），说明当时解析到的版本没出问题，但既然index.html已经验证过精确锁定<code>lightweight-charts@5.2.1</code>可用，而且这一轮round2重写的<code>panes()</code>/<code>addSeries(type, opts, paneIndex)</code>这套多pane API也正是5.2.1引入的写法，这里同步改成精确版本号，把这类风险提前排除。</p>
+
+  <h3>已知范围限制</h3>
+  <p>和另外两个方案一样：周期按钮只做视觉展示不接真实数据；关键数据卡片里总市值/总股本/流通股是固定占位数字；买/卖只弹窗记录数量，不做真实持仓/盈亏模拟。另外指标隐藏用的是"pane高度收0"而不是真移除，如果后续要做到和klinecharts一样干净（副图完全消失、不留空白边界），需要额外补一层pane索引管理代码。</p>
+</div>
+
+<script>
+/* ============================================================
+   数据层：和demo_ec.html同一套手算MA/MACD/BOLL/KDJ公式（Lightweight Charts
+   同样零内置金融指标，MA都要自己算，是三个方案里"内置支持度"最低的）。
+   ============================================================ */
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function generateOHLCV(n, seed){
+  const rng = mulberry32(seed);
+  const dayMs = 86400000;
+  const start = Date.now() - n * dayMs;
+  let price = 100 + rng() * 50;
+  const bars = [];
+  for (let i = 0; i < n; i++){
+    const drift = (rng() - 0.5) * 4;
+    const open = price;
+    const close = Math.max(1, open + drift);
+    const high = Math.max(open, close) + rng() * 2;
+    const low = Math.max(0.5, Math.min(open, close) - rng() * 2);
+    const volume = Math.round(50000 + rng() * 150000);
+    const amount = Math.round(close * volume);
+    bars.push({ timestamp: start + i * dayMs, open, high, low, close, volume, amount });
+    price = close;
+  }
+  return bars;
+}
+
+function calcMA(bars, period){
+  const closes = bars.map(b => b.close);
+  const out = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++){
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+    out[i] = sum / period;
+  }
+  return out;
+}
+
+function calcEMA(values, period){
+  const k = 2 / (period + 1);
+  const out = new Array(values.length).fill(null);
+  let prev = null;
+  for (let i = 0; i < values.length; i++){
+    prev = prev == null ? values[i] : values[i] * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+function calcMACD(bars){
+  const closes = bars.map(b => b.close);
+  const ema12 = calcEMA(closes, 12), ema26 = calcEMA(closes, 26);
+  const dif = closes.map((_, i) => ema12[i] - ema26[i]);
+  const dea = calcEMA(dif, 9);
+  const macd = dif.map((v, i) => (v - dea[i]) * 2);
+  return { dif, dea, macd };
+}
+
+function calcBOLL(bars, period, mult){
+  const closes = bars.map(b => b.close);
+  const mid = new Array(closes.length).fill(null);
+  const upper = new Array(closes.length).fill(null);
+  const lower = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++){
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+    const mean = sum / period;
+    let variance = 0;
+    for (let j = i - period + 1; j <= i; j++) variance += Math.pow(closes[j] - mean, 2);
+    const std = Math.sqrt(variance / period);
+    mid[i] = mean; upper[i] = mean + mult * std; lower[i] = mean - mult * std;
+  }
+  return { mid, upper, lower };
+}
+
+function calcKDJ(bars, period, k1, k2){
+  const out = { k: new Array(bars.length).fill(null), d: new Array(bars.length).fill(null), j: new Array(bars.length).fill(null) };
+  let prevK = 50, prevD = 50;
+  for (let i = 0; i < bars.length; i++){
+    if (i < period - 1) continue;
+    let hh = -Infinity, ll = Infinity;
+    for (let j = i - period + 1; j <= i; j++){ hh = Math.max(hh, bars[j].high); ll = Math.min(ll, bars[j].low); }
+    const rsv = hh === ll ? 50 : (bars[i].close - ll) / (hh - ll) * 100;
+    const k = (prevK * (k1 - 1) + rsv) / k1;
+    const d = (prevD * (k2 - 1) + k) / k2;
+    const j = 3 * k - 2 * d;
+    out.k[i] = k; out.d[i] = d; out.j[i] = j;
+    prevK = k; prevD = d;
+  }
+  return out;
+}
+
+let DATA = null;
+let state = {
+  total: 240,
+  revealCount: 180,
+  seed: 20260815,
+  indicators: { vol: true, macd: true, boll: true, amount: true, kdj: false }
+};
+
+function buildData(n, seed){
+  const bars = generateOHLCV(n, seed);
+  const ma5 = calcMA(bars, 5), ma10 = calcMA(bars, 10), ma20 = calcMA(bars, 20), ma60 = calcMA(bars, 60);
+  const { dif, dea, macd } = calcMACD(bars);
+  const { mid, upper, lower } = calcBOLL(bars, 20, 2);
+  const { k, d, j } = calcKDJ(bars, 9, 3, 3);
+  return { bars, ma5, ma10, ma20, ma60, dif, dea, macd, bollUpper: upper, bollMid: mid, bollLower: lower, kdjK: k, kdjD: d, kdjJ: j };
+}
+
+/* ============================================================
+   Lightweight Charts 引擎：一个chart实例，K线在pane0（主图），
+   VOL/MACD/BOLL/AMOUNT/KDJ各占一个独立pane（原生多pane，v5起支持）。
+
+   真实bug记录（用户实机测试发现）：上一版demo里所有pane（含默认隐藏的KDJ）在初始化时
+   就全部创建好了，隐藏某个指标靠反复调用 pane.setHeight(0) / setHeight(68) 来回切换。
+   实测下来副图显示乱套——查了官方源码才搞清楚两个坑：① setHeight()内部是"从其它pane
+   身上抠出高度补给目标pane"的相对再分配算法（chart-model.ts的changePanesHeight），
+   连续对多个pane分别调用setHeight会互相干扰、越调越乱，不是"设哪个pane哪个pane就精确变成
+   那个高度"这么简单；② setHeight(0)不是真的0，官方有MIN_PANE_HEIGHT=30px的下限，
+   传0会被强制clamp成30px，所以"隐藏"的KDJ其实一直以30px高度显示着内容，这正是页面下方
+   多出来的那条不明详纹路的真正原因。
+   改用官方推荐的方式修复：默认收起的指标（KDJ）压根不在初始化时创建对应series，
+   等用户真正点开关时才动态addSeries；关闭时用chart.removeSeries()把该指标的全部
+   series都摘掉——一个pane如果没有任何series，会被官方自动判定为空pane并从panes()里
+   摘除，不需要我们手动管理"pane到底该多高"，也不会再有setHeight()互相打架的问题。
+   ============================================================ */
+const UP = '#F5222D', DOWN = '#16A34A';
+const PANE_INDEX = { candle: 0, vol: 1, macd: 2, boll: 3, amount: 4, kdj: 5 };
+// key -> 这个指标占用哪几个series（面板隐藏/显示时要成组一起创建/摘除）
+const INDICATOR_SERIES_KEYS = {
+  vol:    ['vol'],
+  macd:   ['macdHist', 'dif', 'dea'],
+  boll:   ['bollUpper', 'bollMid', 'bollLower'],
+  amount: ['amount'],
+  kdj:    ['kdjK', 'kdjD', 'kdjJ']
+};
+let chart = null;
+let series = {};
+
+function toTime(ts){ return Math.floor(ts / 86400000) * 86400000 / 1000; }
+
+function createSeriesForIndicator(key){
+  const paneIdx = PANE_INDEX[key];
+  if (key === 'vol') {
+    series.vol = chart.addSeries(LightweightCharts.HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+  } else if (key === 'macd') {
+    series.macdHist = chart.addSeries(LightweightCharts.HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, paneIdx);
+    series.dif = chart.addSeries(LightweightCharts.LineSeries, { color: '#e6a23c', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+    series.dea = chart.addSeries(LightweightCharts.LineSeries, { color: '#3d7dff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+  } else if (key === 'boll') {
+    series.bollUpper = chart.addSeries(LightweightCharts.LineSeries, { color: UP, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+    series.bollMid = chart.addSeries(LightweightCharts.LineSeries, { color: '#3d7dff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+    series.bollLower = chart.addSeries(LightweightCharts.LineSeries, { color: DOWN, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+  } else if (key === 'amount') {
+    series.amount = chart.addSeries(LightweightCharts.HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, paneIdx);
+  } else if (key === 'kdj') {
+    series.kdjK = chart.addSeries(LightweightCharts.LineSeries, { color: '#e6a23c', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+    series.kdjD = chart.addSeries(LightweightCharts.LineSeries, { color: '#a463f2', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+    series.kdjJ = chart.addSeries(LightweightCharts.LineSeries, { color: '#3d7dff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIdx);
+  }
+  // 新pane和其它副图pane用同样的相对权重（stretchFactor，默认就是1，这里显式写出来
+  // 只是为了不依赖"默认值恰好是1"这种隐含假设）；主图pane在initChart()里另外给了更大的权重。
+  try {
+    const pane = chart.panes()[paneIdx];
+    if (pane && typeof pane.setStretchFactor === 'function') pane.setStretchFactor(1);
+  } catch(e){}
+  // 把当前已经回放到的那部分K线数据一次性灌给刚创建的series，不然新开的副图会是空的
+  const d = dataUpTo(state.revealCount);
+  (INDICATOR_SERIES_KEYS[key] || []).forEach(sk => { if (series[sk] && d[sk]) series[sk].setData(d[sk]); });
+}
+
+function removeSeriesForIndicator(key){
+  (INDICATOR_SERIES_KEYS[key] || []).forEach(sk => {
+    if (series[sk]) {
+      try { chart.removeSeries(series[sk]); } catch(e){ log('Lightweight Charts removeSeries异常: ' + e.message, 'err'); }
+      delete series[sk];
+    }
+  });
+}
+
+function applyIndicatorVisibility(){
+  if (!chart) return;
+  Object.keys(INDICATOR_SERIES_KEYS).forEach(key => {
+    const shouldShow = !!state.indicators[key];
+    const exists = INDICATOR_SERIES_KEYS[key].every(sk => !!series[sk]);
+    if (shouldShow && !exists) createSeriesForIndicator(key);
+    else if (!shouldShow && exists) removeSeriesForIndicator(key);
+  });
+}
+
+function initChart(){
+  const container = document.getElementById('mainPane');
+  chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth, height: container.clientHeight,
+    layout: { background: { color: '#ffffff' }, textColor: '#1f2430', fontSize: 10 },
+    grid: { vertLines: { color: '#eceef3' }, horzLines: { color: '#eceef3' } },
+    rightPriceScale: { borderColor: '#dfe3ec' },
+    timeScale: { borderColor: '#dfe3ec', timeVisible: false },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    handleScroll: true, handleScale: true
+  });
+
+  series.candle = chart.addSeries(LightweightCharts.CandlestickSeries, {
+    upColor: 'transparent', downColor: DOWN,
+    borderVisible: true, borderUpColor: UP, borderDownColor: DOWN,
+    wickUpColor: UP, wickDownColor: DOWN
+  }, PANE_INDEX.candle);
+  series.ma5 = chart.addSeries(LightweightCharts.LineSeries, { color: '#e6a23c', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.candle);
+  series.ma10 = chart.addSeries(LightweightCharts.LineSeries, { color: '#a463f2', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.candle);
+  series.ma20 = chart.addSeries(LightweightCharts.LineSeries, { color: '#3d7dff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.candle);
+  series.ma60 = chart.addSeries(LightweightCharts.LineSeries, { color: '#01C5C4', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.candle);
+  try {
+    const mainPane = chart.panes()[PANE_INDEX.candle];
+    if (mainPane && typeof mainPane.setStretchFactor === 'function') mainPane.setStretchFactor(3);
+  } catch(e){}
+
+  loadInitial();
+  applyIndicatorVisibility(); // 按state.indicators的默认值创建vol/macd/boll/amount（kdj默认关闭，不创建）
+}
+
+function dataUpTo(count){
+  const bars = DATA.bars.slice(0, count);
+  return {
+    candle: bars.map(b => ({ time: toTime(b.timestamp), open: b.open, high: b.high, low: b.low, close: b.close })),
+    ma5: bars.map((b, i) => DATA.ma5[i] != null ? { time: toTime(b.timestamp), value: DATA.ma5[i] } : null).filter(Boolean),
+    ma10: bars.map((b, i) => DATA.ma10[i] != null ? { time: toTime(b.timestamp), value: DATA.ma10[i] } : null).filter(Boolean),
+    ma20: bars.map((b, i) => DATA.ma20[i] != null ? { time: toTime(b.timestamp), value: DATA.ma20[i] } : null).filter(Boolean),
+    ma60: bars.map((b, i) => DATA.ma60[i] != null ? { time: toTime(b.timestamp), value: DATA.ma60[i] } : null).filter(Boolean),
+    vol: bars.map(b => ({ time: toTime(b.timestamp), value: b.volume, color: b.close >= b.open ? UP : DOWN })),
+    amount: bars.map(b => ({ time: toTime(b.timestamp), value: b.amount, color: b.close >= b.open ? UP : DOWN })),
+    dif: bars.map((b, i) => ({ time: toTime(b.timestamp), value: DATA.dif[i] })),
+    dea: bars.map((b, i) => ({ time: toTime(b.timestamp), value: DATA.dea[i] })),
+    macdHist: bars.map((b, i) => ({ time: toTime(b.timestamp), value: DATA.macd[i], color: DATA.macd[i] >= 0 ? UP : DOWN })),
+    bollUpper: bars.map((b, i) => DATA.bollUpper[i] != null ? { time: toTime(b.timestamp), value: DATA.bollUpper[i] } : null).filter(Boolean),
+    bollMid: bars.map((b, i) => DATA.bollMid[i] != null ? { time: toTime(b.timestamp), value: DATA.bollMid[i] } : null).filter(Boolean),
+    bollLower: bars.map((b, i) => DATA.bollLower[i] != null ? { time: toTime(b.timestamp), value: DATA.bollLower[i] } : null).filter(Boolean),
+    kdjK: bars.map((b, i) => DATA.kdjK[i] != null ? { time: toTime(b.timestamp), value: DATA.kdjK[i] } : null).filter(Boolean),
+    kdjD: bars.map((b, i) => DATA.kdjD[i] != null ? { time: toTime(b.timestamp), value: DATA.kdjD[i] } : null).filter(Boolean),
+    kdjJ: bars.map((b, i) => DATA.kdjJ[i] != null ? { time: toTime(b.timestamp), value: DATA.kdjJ[i] } : null).filter(Boolean)
+  };
+}
+
+function loadInitial(){
+  // 注意：这里只应该给"当前已经存在"的series灌数据 —— vol/macd/boll/amount/kdj这些副图series
+  // 是applyIndicatorVisibility()按需lazy创建的，调用loadInitial()时不一定已经全部创建好，
+  // 所以每一条都要判断series[xxx]是否存在，不能像旧版那样无条件调用，否则指标默认关闭时会直接报错。
+  const d = dataUpTo(state.revealCount);
+  if (series.candle) series.candle.setData(d.candle);
+  if (series.ma5) series.ma5.setData(d.ma5);
+  if (series.ma10) series.ma10.setData(d.ma10);
+  if (series.ma20) series.ma20.setData(d.ma20);
+  if (series.ma60) series.ma60.setData(d.ma60);
+  if (series.vol) series.vol.setData(d.vol);
+  if (series.macdHist) series.macdHist.setData(d.macdHist);
+  if (series.dif) series.dif.setData(d.dif);
+  if (series.dea) series.dea.setData(d.dea);
+  if (series.bollUpper) series.bollUpper.setData(d.bollUpper);
+  if (series.bollMid) series.bollMid.setData(d.bollMid);
+  if (series.bollLower) series.bollLower.setData(d.bollLower);
+  if (series.amount) series.amount.setData(d.amount);
+  if (series.kdjK) series.kdjK.setData(d.kdjK);
+  if (series.kdjD) series.kdjD.setData(d.kdjD);
+  if (series.kdjJ) series.kdjJ.setData(d.kdjJ);
+  chart.timeScale().fitContent();
+}
+
+function pushOneBarLwc(index){
+  // 同样的道理：推进一根K线时，只更新当前确实存在的series，被隐藏（已removeSeries）的指标
+  // 不能再调用.update()，否则会拿到undefined直接抛异常（这是round2修复前的真实bug）。
+  const b = DATA.bars[index];
+  const t = toTime(b.timestamp);
+  if (series.candle) series.candle.update({ time: t, open: b.open, high: b.high, low: b.low, close: b.close });
+  if (series.ma5 && DATA.ma5[index] != null) series.ma5.update({ time: t, value: DATA.ma5[index] });
+  if (series.ma10 && DATA.ma10[index] != null) series.ma10.update({ time: t, value: DATA.ma10[index] });
+  if (series.ma20 && DATA.ma20[index] != null) series.ma20.update({ time: t, value: DATA.ma20[index] });
+  if (series.ma60 && DATA.ma60[index] != null) series.ma60.update({ time: t, value: DATA.ma60[index] });
+  if (series.vol) series.vol.update({ time: t, value: b.volume, color: b.close >= b.open ? UP : DOWN });
+  if (series.amount) series.amount.update({ time: t, value: b.amount, color: b.close >= b.open ? UP : DOWN });
+  if (series.dif) series.dif.update({ time: t, value: DATA.dif[index] });
+  if (series.dea) series.dea.update({ time: t, value: DATA.dea[index] });
+  if (series.macdHist) series.macdHist.update({ time: t, value: DATA.macd[index], color: DATA.macd[index] >= 0 ? UP : DOWN });
+  if (series.bollUpper && DATA.bollUpper[index] != null) series.bollUpper.update({ time: t, value: DATA.bollUpper[index] });
+  if (series.bollMid && DATA.bollMid[index] != null) series.bollMid.update({ time: t, value: DATA.bollMid[index] });
+  if (series.bollLower && DATA.bollLower[index] != null) series.bollLower.update({ time: t, value: DATA.bollLower[index] });
+  if (series.kdjK && DATA.kdjK[index] != null) series.kdjK.update({ time: t, value: DATA.kdjK[index] });
+  if (series.kdjD && DATA.kdjD[index] != null) series.kdjD.update({ time: t, value: DATA.kdjD[index] });
+  if (series.kdjJ && DATA.kdjJ[index] != null) series.kdjJ.update({ time: t, value: DATA.kdjJ[index] });
+}
+
+function resizeChart(){
+  if (!chart) return;
+  const container = document.getElementById('mainPane');
+  chart.resize(container.clientWidth, container.clientHeight);
+}
+
+/* ============================================================
+   通用UI逻辑
+   ============================================================ */
+const $ = (id) => document.getElementById(id);
+
+function log(msg, cls){
+  const el = $('diag');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  line.textContent = `[${t}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  while (el.children.length > 150) el.removeChild(el.firstChild);
+}
+
+function fmt(n, digits){ return (n == null || isNaN(n)) ? '--' : n.toFixed(digits == null ? 2 : digits); }
+function fmtVol(v){ return v >= 1e8 ? (v/1e8).toFixed(2) + '亿' : v >= 1e4 ? (v/1e4).toFixed(2) + '万' : String(v); }
+
+function currentBar(){ return DATA.bars[state.revealCount - 1]; }
+function prevBar(){ return state.revealCount >= 2 ? DATA.bars[state.revealCount - 2] : null; }
+
+function updateHeader(){
+  const b = currentBar();
+  if (!b) return;
+  const pb = prevBar();
+  const prevClose = pb ? pb.close : b.open;
+  const chg = b.close - prevClose;
+  const pct = prevClose ? (chg / prevClose * 100) : 0;
+  const cls = chg >= 0 ? 'up-color' : 'down-color';
+  $('curPrice').textContent = fmt(b.close);
+  $('curPrice').className = 'price ' + cls;
+  $('curChange').textContent = `${chg >= 0 ? '+' : ''}${fmt(chg)}  ${chg >= 0 ? '+' : ''}${fmt(pct)}%`;
+  $('curChange').className = 'change ' + cls;
+  $('ohlcLabel').textContent = `开:${fmt(b.open)} 高:${fmt(b.high)} 低:${fmt(b.low)} 收:${fmt(b.close)}`;
+}
+
+function updateKeyData(){
+  const b = currentBar();
+  if (!b) return;
+  const pb = prevBar();
+  const prevClose = pb ? pb.close : b.open;
+  const bars = DATA.bars.slice(0, state.revealCount);
+  const amplitude = prevClose ? ((b.high - b.low) / prevClose * 100) : 0;
+  const upLimit = prevClose * 1.1, downLimit = prevClose * 0.9;
+  const avgVol5 = bars.slice(-6, -1).reduce((s, x) => s + x.volume, 0) / Math.max(1, Math.min(5, bars.length - 1));
+  const volRatio = avgVol5 ? (b.volume / avgVol5) : 1;
+  const turnoverShares = 4.38e8;
+  const turnover = (b.volume / turnoverShares * 100);
+  const outerVol = Math.round(b.volume * (b.close >= b.open ? 0.55 : 0.45));
+  const innerVol = b.volume - outerVol;
+  const items = [
+    ['最高', fmt(b.high)], ['最低', fmt(b.low)],
+    ['今开', fmt(b.open)], ['昨收', fmt(prevClose)],
+    ['成交量', fmtVol(b.volume)], ['成交额', fmtVol(b.amount)],
+    ['量比', fmt(volRatio)], ['换手', fmt(turnover) + '%'],
+    ['振幅', fmt(amplitude) + '%'], ['涨停', fmt(upLimit)],
+    ['跌停', fmt(downLimit)], ['外盘', fmtVol(outerVol)],
+    ['内盘', fmtVol(innerVol)], ['总市值', '173.30亿'],
+    ['总股本', '7.53亿'], ['流通股', '4.38亿']
+  ];
+  $('keyDataGrid').innerHTML = items.map(([label, value]) =>
+    `<div class="kd-item"><span class="kd-label">${label}</span><span class="kd-value">${value}</span></div>`
+  ).join('');
+}
+
+function updateProgress(){
+  const pct = (state.revealCount / state.total * 100).toFixed(1);
+  $('progressFill').style.width = pct + '%';
+  $('shownCount').textContent = state.revealCount;
+  $('remainCount').textContent = `剩余 ${state.total - state.revealCount}`;
+  const atEnd = state.revealCount >= state.total;
+  $('buyBtn').disabled = atEnd;
+  $('sellBtn').disabled = atEnd;
+  $('holdBtn').disabled = atEnd;
+}
+
+function updateMaLegend(){
+  const idx = state.revealCount - 1;
+  const pairs = [['MA5', DATA.ma5], ['MA10', DATA.ma10], ['MA20', DATA.ma20], ['MA60', DATA.ma60]];
+  const html = pairs.map(([label, arr]) => {
+    const v = arr[idx];
+    if (v == null) return `<span>${label}:--</span>`;
+    const prev = idx > 0 ? arr[idx - 1] : null;
+    let arrow = '', cls = '';
+    if (prev != null && v > prev) { arrow = '↑'; cls = 'up-color'; }
+    else if (prev != null && v < prev) { arrow = '↓'; cls = 'down-color'; }
+    return `<span class="${cls}">${label}:${v.toFixed(2)}${arrow}</span>`;
+  }).join('');
+  $('maLegend').innerHTML = html;
+}
+
+function refreshAllPanels(){
+  updateHeader();
+  updateMaLegend();
+  updateKeyData();
+  updateProgress();
+}
+
+function addTradeLog(action, qty){
+  const b = currentBar();
+  const el = document.createElement('div');
+  el.className = 'trade-log-item';
+  const tagClass = action === '买入' ? 'buy' : action === '卖出' ? 'sell' : 'hold';
+  const qtyText = qty != null ? ` ${qty}股` : '';
+  el.innerHTML = `<span class="tag ${tagClass}">${action}</span>第${state.revealCount}根 @ ${fmt(b.close)}${qtyText}`;
+  $('tradeLog').insertBefore(el, $('tradeLog').firstChild);
+}
+
+function advanceOneBar(){
+  if (state.revealCount >= state.total) return;
+  if (chart) pushOneBarLwc(state.revealCount);
+  state.revealCount++;
+  refreshAllPanels();
+}
+
+function renderIndicatorToggles(){
+  const labels = { vol: '成交量', macd: 'MACD', boll: 'BOLL', amount: '成交额', kdj: 'KDJ' };
+  const wrap = $('indicatorToggles');
+  wrap.innerHTML = '';
+  Object.keys(labels).forEach(key => {
+    const btn = document.createElement('button');
+    btn.className = 'ind-toggle' + (state.indicators[key] ? ' on' : '');
+    btn.textContent = (state.indicators[key] ? '✓ ' : '') + labels[key];
+    btn.addEventListener('click', () => {
+      state.indicators[key] = !state.indicators[key];
+      renderIndicatorToggles();
+      // round2修复：不再用setHeight(0)"假隐藏"（LWC内部会clamp到MIN_PANE_HEIGHT=30px，根本藏不住，
+      // 而且连续setHeight()还会互相挤占高度导致布局错乱）。改为按需创建/彻底removeSeries，
+      // 一个pane的series全部移除后，LWC会自动把这个pane从chart.panes()里剔除。
+      applyIndicatorVisibility();
+      log(`指标"${labels[key]}"切换为${state.indicators[key] ? '显示（懒加载创建series）' : '隐藏（removeSeries，pane自动被剔除)'}`);
+    });
+    wrap.appendChild(btn);
+  });
+}
+
+let pendingAction = null;
+
+function openTradeModal(action){
+  pendingAction = action;
+  $('modalTitle').textContent = action === 'buy' ? '买入' : '卖出';
+  const b = currentBar();
+  $('modalPriceHint').textContent = `参考价：${fmt(b.close)}（模拟，仅记录操作，不做真实持仓/盈亏计算）`;
+  $('tradeModal').classList.add('show');
+}
+function closeTradeModal(){ $('tradeModal').classList.remove('show'); pendingAction = null; }
+
+function bindTopbarPeriods(){
+  document.querySelectorAll('.topbar button[data-period]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.topbar button[data-period]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      if (btn.dataset.period !== 'day') {
+        log(`"${btn.textContent}"周期仅做界面展示，本demo只实现日K逐根回放，不接其它周期的真实数据`, 'err');
+      }
+    });
+  });
+}
+
+function bindTradeButtons(){
+  $('buyBtn').addEventListener('click', () => openTradeModal('buy'));
+  $('sellBtn').addEventListener('click', () => openTradeModal('sell'));
+  $('holdBtn').addEventListener('click', () => {
+    addTradeLog('持有', null);
+    log(`第${state.revealCount}根：持有（推进下一根）`);
+    advanceOneBar();
+  });
+  $('modalCancel').addEventListener('click', closeTradeModal);
+  $('modalConfirm').addEventListener('click', () => {
+    const qty = Math.max(1, parseInt($('tradeQty').value, 10) || 100);
+    const actionLabel = pendingAction === 'buy' ? '买入' : '卖出';
+    addTradeLog(actionLabel, qty);
+    log(`第${state.revealCount}根：${actionLabel} ${qty}股（仅记录，不做真实持仓/盈亏计算），推进下一根`);
+    closeTradeModal();
+    advanceOneBar();
+  });
+}
+
+function loadLwcLib(){
+  if (typeof LightweightCharts !== 'undefined') {
+    log('Lightweight Charts 已在全局环境中就绪，跳过网络加载', 'ok');
+    return Promise.resolve(true);
+  }
+  // 预防性修复：demo_kc.html之前只锁大版本号，CDN解析到了缺方法的版本导致
+  // chart.setDataLoader is not a function。这个文件的CDN地址原本也只锁了大版本号"5"，
+  // 存在同样的风险——你测这个文件时图表本身显示正常，说明当时解析到的版本没出问题，
+  // 但既然index.html已经验证过锁定5.2.1这个具体版本可用（本demo这一轮也是照着v5的
+  // panes()/addSeries(type, opts, paneIndex)这套API写的，和5.2.1一致），这里同样改成
+  // 精确锁定，把潜在风险提前排除，不用等它哪天真的解析到不兼容版本才发现。
+  const sources = [
+    'https://registry.npmmirror.com/lightweight-charts/5.2.1/files/dist/lightweight-charts.standalone.production.js',
+    'https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js',
+    'https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js'
+  ];
+  return new Promise((resolve) => {
+    let i = 0;
+    function tryNext(){
+      if (i >= sources.length) { resolve(false); return; }
+      const src = sources[i++];
+      const el = document.createElement('script');
+      el.src = src;
+      el.onload = () => { log(`Lightweight Charts 加载成功（源：${src}）`, 'ok'); resolve(true); };
+      el.onerror = () => { log(`Lightweight Charts 从 ${src} 加载失败，尝试下一个源`, 'err'); tryNext(); };
+      document.head.appendChild(el);
+    }
+    tryNext();
+  });
+}
+
+async function boot(){
+  state.seed = Date.now() % 1e9;
+  DATA = buildData(state.total, state.seed);
+  log(`生成模拟数据：${state.total} 根日线（seed=${state.seed}）`);
+  renderIndicatorToggles();
+  bindTopbarPeriods();
+  bindTradeButtons();
+  refreshAllPanels();
+
+  const ok = await loadLwcLib();
+  if (!ok || typeof LightweightCharts === 'undefined') {
+    $('mainPane').innerHTML = '<div style="padding:20px;color:#c0392b;">Lightweight Charts 加载失败，请检查网络后刷新重试。</div>';
+    log('Lightweight Charts 三个镜像源全部加载失败', 'err');
+    return;
+  }
+  try {
+    initChart();
+    log('Lightweight Charts 初始化完成', 'ok');
+  } catch(e){
+    log('Lightweight Charts 初始化异常: ' + e.message, 'err');
+    console.error(e);
+  }
+  window.addEventListener('resize', resizeChart);
+}
+
+boot();
+</script>
+
+</body>
+</html>

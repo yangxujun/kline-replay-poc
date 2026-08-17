@@ -1,0 +1,1863 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="tdx">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>K线逐根回放 · 技术验证 Demo</title>
+
+<!-- 三个图表库改为运行时动态加载 + 多镜像自动重试（见下方脚本），不在此处静态引入，
+     这样任意一个源被墙 / 加载失败都不会导致整页空白，且能精确定位到底是哪个库、哪个源失败。 -->
+
+<style>
+  :root{
+    --gap: 12px;
+  }
+  html[data-theme="light"]{
+    --bg: #f2f3f7;
+    --panel: #ffffff;
+    --panel-2: #f7f8fb;
+    --border: #e3e5ec;
+    --text: #1c1f2b;
+    --text-dim: #6b7280;
+    --accent: #6c5ce7;
+    --accent-2: #4b3fc0;
+    --up: #f5222d;
+    --down: #16a34a;
+    --danger-bg: #fff1f0;
+    --danger-text: #cf1322;
+    --shadow: 0 2px 10px rgba(20,20,40,0.06);
+    --chip-bg: #eef0fb;
+  }
+  html[data-theme="dark"]{
+    --bg: #0e1016;
+    --panel: #161923;
+    --panel-2: #1d212e;
+    --border: #2a2f3d;
+    --text: #e6e8f0;
+    --text-dim: #8a90a3;
+    --accent: #8b7cf6;
+    --accent-2: #a493ff;
+    --up: #f5222d;
+    --down: #2dc08e;
+    --danger-bg: #3a1418;
+    --danger-text: #ff7875;
+    --shadow: 0 2px 14px rgba(0,0,0,0.4);
+    --chip-bg: #232842;
+  }
+  /* 通达信风格：经典黑底 + 红涨绿跌 + 金色点缀，K线/副图具体配色见JS里的 TDX_PALETTE */
+  html[data-theme="tdx"]{
+    --bg: #000000;
+    --panel: #0a0a0a;
+    --panel-2: #050505;
+    --border: #262626;
+    --text: #d9d9d9;
+    --text-dim: #8c8c8c;
+    --accent: #d4a017;
+    --accent-2: #ffd400;
+    --up: #ff3232;
+    --down: #00cc66;
+    --danger-bg: #2a0a0a;
+    --danger-text: #ff6b6b;
+    --shadow: 0 2px 14px rgba(0,0,0,0.6);
+    --chip-bg: #1a1a1a;
+  }
+
+  * { box-sizing: border-box; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif; }
+  body{ padding-bottom: 40px; }
+
+  header.topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 10px 16px; background:var(--panel); border-bottom:1px solid var(--border);
+    position: sticky; top:0; z-index:20; box-shadow: var(--shadow);
+    flex-wrap: wrap; gap:8px;
+  }
+  header.topbar h1{ font-size: 16px; margin:0; font-weight:600; display:flex; align-items:center; gap:8px;}
+  header.topbar h1 .sub{ font-size:12px; color:var(--text-dim); font-weight:400; }
+  .theme-btn{
+    border:1px solid var(--border); background:var(--panel-2); color:var(--text);
+    border-radius: 8px; padding: 8px 12px; font-size:13px; cursor:pointer; min-height:36px;
+  }
+
+  .tabs{
+    display:flex; gap:6px; padding: 10px 16px 0 16px; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  }
+  .tab-btn{
+    flex: 0 0 auto; padding: 9px 14px; border-radius: 10px 10px 0 0; border:1px solid var(--border);
+    border-bottom:none; background:var(--panel-2); color:var(--text-dim); font-size:13px; cursor:pointer;
+    white-space:nowrap; min-height:40px;
+  }
+  .tab-btn.active{ background:var(--panel); color:var(--accent); font-weight:600; border-color: var(--accent); }
+
+  main{ padding: 0 16px; max-width: 1400px; margin: 0 auto; }
+
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius: 0 10px 10px 10px;
+    box-shadow: var(--shadow); padding: 14px; margin-bottom: 14px;
+  }
+
+  .controls{
+    display:flex; flex-wrap:wrap; gap: 10px 16px; align-items:flex-end; padding: 12px 14px;
+    background:var(--panel); border:1px solid var(--border); border-radius: 10px; margin: 12px 0;
+    box-shadow: var(--shadow);
+  }
+  .field{ display:flex; flex-direction:column; gap:4px; }
+  .field label{ font-size: 11px; color:var(--text-dim); }
+  .field input[type=number]{
+    width: 84px; padding:7px 8px; border-radius:8px; border:1px solid var(--border);
+    background:var(--panel-2); color:var(--text); font-size:13px;
+  }
+  .field input[type=range]{ width: 140px; }
+  .btn{
+    border:none; border-radius:8px; padding: 9px 16px; font-size:13px; cursor:pointer; min-height:38px;
+    background:var(--accent); color:#fff; font-weight:600;
+  }
+  .btn.secondary{ background:var(--panel-2); color:var(--text); border:1px solid var(--border); }
+  .chip-toggle{
+    border:1px solid var(--border); background:var(--panel-2); color:var(--text-dim);
+    border-radius:999px; padding: 7px 14px; font-size:12.5px; cursor:pointer; min-height:34px;
+  }
+  .chip-toggle.on{ background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+  .btn.wide{ padding: 9px 24px; }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  .btn-row{ display:flex; gap:8px; flex-wrap:wrap; }
+
+  .status-chip{
+    background:var(--chip-bg); color:var(--accent); border-radius: 999px; padding: 8px 14px;
+    font-size:13px; font-weight:600; display:flex; align-items:center; gap:6px; white-space:nowrap;
+  }
+  .status-chip .muted{ color:var(--text-dim); font-weight:400; }
+
+  .viewport-badge{
+    font-size:11px; color:var(--text-dim); background:var(--panel-2); border:1px solid var(--border);
+    border-radius:999px; padding:4px 10px;
+  }
+
+  .engine-wrap{ position:relative; }
+  .engine-pane{
+    display:none; width:100%; position:relative;
+    height: clamp(360px, 62vh, 640px);
+    background: var(--panel-2); border-radius: 8px; overflow:hidden;
+  }
+  .engine-pane.active{ display:block; }
+
+  /* 对比页签：三个方案同屏并排（宽屏）或上下堆叠（窄屏），方便直接横向比较视觉效果 */
+  .compare-pane{ height: clamp(900px, 190vh, 1700px); overflow-y:auto; padding:0; }
+  .compare-grid{ display:flex; flex-direction:column; gap:10px; padding:10px; }
+  .compare-cell{
+    flex:0 0 auto; min-height:260px; display:flex; flex-direction:column;
+    border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--panel);
+  }
+  .compare-cell-label{
+    padding:6px 10px; font-size:12px; font-weight:600; color:var(--accent);
+    background:var(--panel); border-bottom:1px solid var(--border); flex:0 0 auto;
+  }
+  .compare-chart{ flex:1 1 auto; position:relative; min-height:230px; }
+  @media (min-width: 900px){
+    .compare-pane{ height: clamp(420px, 62vh, 640px); overflow-y:hidden; }
+    .compare-grid{ flex-direction:row; height:100%; }
+    .compare-cell{ flex:1 1 0; min-height:0; }
+  }
+  @media (max-width: 640px){
+    .compare-pane{ height: clamp(760px, 150vh, 1400px); }
+    .compare-cell{ min-height:220px; }
+  }
+  @media (max-height: 500px) and (orientation: landscape){
+    .compare-pane{ height: clamp(560px, 150vh, 1200px); }
+    .compare-cell{ min-height:160px; }
+    .compare-cell-label{ padding:3px 8px; font-size:11px; }
+  }
+
+  .pane-status{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    max-width: 100%; text-align:center; font-size: 13px; line-height:1.7; color:var(--text-dim);
+    padding: 16px; box-sizing:border-box; pointer-events:none;
+  }
+  .pane-status.error{ pointer-events:auto; }
+  .pane-status .status-inner{ max-width: 420px; }
+  .pane-status .spinner{
+    width:22px; height:22px; margin: 0 auto 10px; border-radius:50%;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  .pane-status.error{ color: var(--danger-text); }
+  .pane-status .retry-btn{
+    margin-top:10px; border:1px solid var(--border); background:var(--panel); color:var(--text);
+    border-radius:8px; padding:7px 14px; font-size:12.5px; cursor:pointer;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  .diag{
+    margin-top: 10px; font-size:12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    max-height: 140px; overflow:auto; background:var(--panel-2); border:1px solid var(--border);
+    border-radius:8px; padding: 8px 10px; color: var(--text-dim);
+  }
+  .diag .err{ color: var(--danger-text); }
+  .diag .ok{ color: var(--down); }
+
+  /* 技术验证结论卡片：只在"三方案对比"页签下显示，其它三个方案页签下面不出现，
+     所以默认display:none，切到compare页签时JS给它加.active才显示——和.engine-pane.active
+     是同一套显示/隐藏机制，保持风格一致。 */
+  #findingsCard{ display:none; }
+  #findingsCard.active{ display:block; }
+  .findings{ font-size: 13px; line-height:1.7; }
+  .findings h3{ font-size:14px; margin: 14px 0 6px; }
+  .findings h3:first-child{ margin-top:0; }
+  .findings table{ width:100%; border-collapse: collapse; font-size:12.5px; margin-top:6px;}
+  .findings th, .findings td{ border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top;}
+  .findings th{ background: var(--panel-2); }
+  .tag{ display:inline-block; padding:1px 7px; border-radius:999px; font-size:11px; font-weight:600; }
+  .tag.good{ background:#e7f9ef; color:#0a8a4b; }
+  .tag.warn{ background:#fff7e0; color:#a15c00; }
+  .tag.bad{ background:var(--danger-bg); color:var(--danger-text); }
+  html[data-theme="dark"] .tag.good{ background:#0f2c20; color:#2dc08e; }
+  html[data-theme="dark"] .tag.warn{ background:#332707; color:#ffce54; }
+
+  @media (max-width: 640px){
+    header.topbar h1{ font-size:14px; }
+    .controls{ padding:10px; }
+    .field input[type=number]{ width:64px; }
+    .field input[type=range]{ width:100px; }
+    .btn{ padding:8px 12px; font-size:12.5px; }
+    .engine-pane{ height: clamp(300px, 52vh, 460px); }
+  }
+
+  /* 手机横屏：视口高度很小，vh算出来的图表区可能被压得很扁，改用固定的、够用的高度兜底 */
+  @media (max-height: 500px) and (orientation: landscape){
+    header.topbar{ padding: 6px 12px; }
+    .controls{ padding: 8px 10px; gap: 6px 12px; }
+    .engine-pane{ height: 260px; }
+    .diag{ max-height: 90px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>K线逐根回放技术验证 <span class="sub">klinecharts / ECharts / Lightweight Charts 三方案对比</span></h1>
+  <div style="display:flex; align-items:center; gap:8px;">
+    <span class="viewport-badge" id="viewportBadge">--</span>
+    <button class="theme-btn" id="themeToggle">🌙 切换黑夜模式</button>
+  </div>
+</header>
+
+<div class="tabs" id="tabs">
+  <button class="tab-btn active" data-engine="kline">方案一 · klinecharts</button>
+  <button class="tab-btn" data-engine="echarts">方案二 · ECharts</button>
+  <button class="tab-btn" data-engine="lwc">方案三 · Lightweight Charts</button>
+  <button class="tab-btn" data-engine="compare">📊 三方案对比</button>
+</div>
+
+<main>
+  <div class="card" style="border-radius:0 10px 10px 10px;">
+
+    <div class="controls">
+      <div class="field">
+        <label>总K线根数（截止日期前总量）</label>
+        <input type="number" id="totalBars" value="300" min="20" max="3000" step="10" />
+      </div>
+      <div class="field">
+        <label>初始显示根数</label>
+        <input type="number" id="initialBars" value="220" min="5" max="3000" step="5" />
+      </div>
+      <div class="btn-row">
+        <button class="btn secondary" id="regenBtn">🔄 生成模拟数据</button>
+        <button class="btn secondary" id="realDataBtn">🌐 尝试加载真实历史数据</button>
+        <button class="btn secondary" id="resetBtn">⏮ 重置到初始</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="prevBtn">⬅ 上一根</button>
+        <button class="btn wide" id="nextBtn">下一根 ➡</button>
+      </div>
+      <div class="status-chip">
+        剩余K线：<span id="remainCount">--</span>/<span id="totalCount">--</span>
+        <span class="muted">｜已显示 <span id="shownCount">--</span> 根</span>
+      </div>
+      <div class="status-chip" id="dataSourceChip">数据来源：模拟数据</div>
+    </div>
+
+    <div class="controls" id="indicatorBar" style="margin-top:-4px;">
+      <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+        <label style="font-size:12px; color:var(--text-dim);">副图指标：</label>
+      </div>
+      <div class="btn-row" id="indicatorToggles"></div>
+    </div>
+
+    <div class="engine-wrap">
+      <div class="engine-pane active" id="pane-kline"></div>
+      <div class="engine-pane" id="pane-echarts"></div>
+      <div class="engine-pane" id="pane-lwc"></div>
+      <div class="engine-pane compare-pane" id="pane-compare">
+        <div class="compare-grid">
+          <div class="compare-cell">
+            <div class="compare-cell-label">方案一 · klinecharts</div>
+            <div class="compare-chart" id="pane-compare-kline"></div>
+          </div>
+          <div class="compare-cell">
+            <div class="compare-cell-label">方案二 · ECharts</div>
+            <div class="compare-chart" id="pane-compare-echarts"></div>
+          </div>
+          <div class="compare-cell">
+            <div class="compare-cell-label">方案三 · Lightweight Charts</div>
+            <div class="compare-chart" id="pane-compare-lwc"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="diag" id="diag">诊断日志：等待初始化...</div>
+  </div>
+
+  <div class="card findings" id="findingsCard">
+    <h3>📋 技术验证结论（klinecharts / ECharts / Lightweight Charts 三方案对比）</h3>
+    <div id="findingsBody">
+
+      <p><b>结论先行：三个方案都能做，没有"完全做不到、必须自己手撸引擎"的方案。</b>
+      差异主要在开发工作量和细节风险上，不在"能不能实现"上。如果要选一个，
+      <b>推荐 klinecharts</b>：它是专门为"K线 + 成交量/MACD等副图 + 移动端"这个场景做的开源库，
+      逐根追加数据、多副图、暗黑模式都是内置能力，工作量最小。</p>
+
+      <table>
+        <tr><th>能力点</th><th>klinecharts v10</th><th>ECharts v6</th><th>Lightweight Charts v5</th></tr>
+        <tr>
+          <td>逐根追加K线（"点下一根出下一根"）</td>
+          <td><span class="tag good">原生支持（但API和v9不一样）</span><br/>v10把数据接入整个改成了"拉取式"：<code>setDataLoader({getBars, subscribeBar})</code>，图表要初始数据时自己调 <code>getBars</code> 问你要，"下一根"这种主动推送则是通过 <code>subscribeBar</code> 先拿到图表给的回调，之后调这个回调=推一根新数据。上一版demo写的是v9的 <code>applyNewData()/updateData()</code>，在v10里其实已经不存在了，这是实测中真实踩到、又修复的一个坑，说明版本升级对接入方式的改动可以很大。</td>
+          <td><span class="tag warn">需要自己封装</span><br/>本demo每次点击对全部可见数组重新 <code>setOption()</code>；也有 <code>appendData()</code> 但要自己维护 xAxis 类目数组同步，容易出小bug，得不偿失，setOption 在千根量级下实测也够快。</td>
+          <td><span class="tag good">原生支持</span><br/><code>series.setData()</code> 铺初始数据，<code>series.update(bar)</code> 追加一根，语义和 klinecharts 几乎一样。</td>
+        </tr>
+        <tr>
+          <td>成交量/MACD 独立副图 + 十字光标/时间轴多图联动</td>
+          <td><span class="tag good">内置</span><br/><code>createIndicator('VOL')</code> / <code>createIndicator('MACD')</code> 自动生成新副图，同一个chart实例，联动免配置。</td>
+          <td><span class="tag warn">需要手工搭建</span><br/>3个grid堆叠 + <code>axisPointer.link</code> + <code>dataZoom</code> 联动，MACD 没有内置指标类型，DIF/DEA/柱子要自己算（本demo已算好，见下方数据层说明）。工作量最大，但都是ECharts的标准玩法，风险低。</td>
+          <td><span class="tag good">内置（v5新特性）</span><br/>v5 之前的版本（v4及更早）<b>不支持多pane</b>，只能靠拼多个chart实例手动同步十字光标和时间轴，是真正的坑。v5 起原生支持 <code>chart.addSeries(Type, options, paneIndex)</code>，一个chart实例多个pane自动同步——<b>务必确认公司最终锁定的版本 ≥ 5.0</b>，这是这条技术路线最大的版本依赖风险。</td>
+        </tr>
+        <tr>
+          <td>明暗主题切换</td>
+          <td><span class="tag warn">需自定义</span><br/><code>chart.setStyles(styleObj)</code>，要自己维护一套完整的明/暗样式对象。v10 相比v9改了不少字段名，本demo已按官方示例编写并加了兜底（就算个别字段名对不上也只是主题降级，不会白屏）。</td>
+          <td><span class="tag good">简单</span><br/>本身无主题概念，直接在 <code>setOption</code> 里按当前主题传对应颜色即可，最灵活可控。</td>
+          <td><span class="tag good">简单</span><br/><code>chart.applyOptions({layout:{...}})</code> 局部更新背景/文字/网格颜色，不需要重建图表。</td>
+        </tr>
+        <tr>
+          <td>移动端触摸 + 响应式</td>
+          <td><span class="tag good">较好</span><br/>官方定位"支持移动端"，内置触摸手势。</td>
+          <td><span class="tag good">较好</span><br/>成熟稳定，触摸缩放/拖动需要 dataZoom 配置，都是常规用法。</td>
+          <td><span class="tag good">较好</span><br/>TradingView 官方出品，触摸交互打磨得不错。</td>
+          </tr>
+        <tr>
+          <td>1000+根性能预期</td>
+          <td><span class="tag good">Canvas渲染，官方宣称轻量（gzip约40k）</span></td>
+          <td><span class="tag warn">Canvas渲染，够用，但每次setOption是全量重绘，根数很大+高频操作时要留意</span></td>
+          <td><span class="tag good">专为高频行情/大数据量场景设计，性能最强</span></td>
+        </tr>
+        <tr>
+          <td>"下一根"的触发方式</td>
+          <td colspan="3">按你的要求，本demo<b>只支持用户手动点击"下一根/上一根"</b>，没有自动播放/定时器逻辑。图表引擎本身只负责"画一根"，和是否自动播放无关——如果以后产品上要做"根据用户历史操作时长自动回放"，只需要在外层加一个 <code>setInterval</code> 调用 <code>nextBar()</code>，图表层完全不用改。</td>
+        </tr>
+      </table>
+
+      <h3>⚠️ 关于"图表加载不出来"的修复说明</h3>
+      <p>上一版demo里三个图表库是用 <code>&lt;script src="https://cdn.jsdelivr.net/..."&gt;</code> 静态引入的——如果你所在网络访问不了 jsdelivr（国内很常见）、或者是在某个应用内嵌的预览面板里打开（面板可能有内容安全策略，只放行部分CDN域名），三个库就都加载不出来，整个图表区域是空白的，而且不容易第一时间看出原因。</p>
+      <p>这一版已经改成<b>运行时动态加载 + 多镜像自动重试</b>：每个库依次尝试 npmmirror（阿里云npm镜像，国内通常最稳）→ jsdelivr → unpkg 等多个源，加载中/加载失败都会<b>直接显示在对应的图表区域里</b>（不再是只有底部日志才能看到），失败时还会列出具体是哪个源、什么错误，并给一个"重试"按钮。</p>
+      <p><b>如果换了这版之后仍然看不到图表</b>，把图表区域里显示出来的具体错误信息截图/文字发我——这比"都看不到"能帮我精确定位到底是网络问题、CSP拦截问题、还是某个库API签名对不上。有一个大概率的可能性要提前说明：如果你是在 Cowork 的预览/图库面板里直接看这个文件，该面板出于安全考虑，可能只允许加载 <code>cdnjs.cloudflare.com</code> 这一个域名的外部脚本，本demo用到的三个库不一定都能在cdnjs上找到匹配版本；这种情况下最可靠的验证方式是<b>把文件下载到本地，用手机/电脑上正常的浏览器（Chrome/Edge/Safari）直接打开</b>，而不是在应用内嵌面板里看。</p>
+
+      <h3>关于K线数据</h3>
+      <p>默认仍然是本地模拟生成（几百根可配置，公式是带随机游走的OHLCV+成交量，纯前端计算不依赖网络，最稳）。按你的要求也加了一个"🌐 尝试加载真实历史数据"按钮，点击后会尝试从 <a href="https://stooq.com" target="_blank" rel="noopener">stooq.com</a> 的公开CSV接口拉取真实历史日线（演示用固定拉AAPL），成功会自动替换当前数据源并在图表标题旁的"数据来源"标签里显示；如果拉取失败（网络/跨域限制等），会在诊断日志里报出原因并自动保留原来的模拟数据，不会导致demo中断。这个接口的可用性同样取决于你打开页面时所在的网络环境，我在这个沙箱里同样无法帮你实测。</p>
+
+      <h3>本次验证的边界说明（请务必读一下）</h3>
+      <p>当前这个技术沙箱环境的出网策略只放行了 Anthropic 自身域名和极少数几个包管理镜像，
+      访问 <code>cdn.jsdelivr.net</code>、<code>unpkg.com</code>、<code>registry.npmmirror.com</code>、<code>registry.npmjs.org</code>、<code>cdnjs.cloudflare.com</code>、
+      <code>stooq.com</code> 等全部被这个沙箱的网关拒绝，所以图表库加载、真实数据拉取，我这边都<b>没法在本环境里跑起来做真机验证</b>，只能做到：核对官方文档确认API签名、语法检查、以及用mock对象把外层交互逻辑（点击下一根/上一根、tab切换保状态、生成数据、明暗主题、手机/平板/桌面响应式布局）完整跑通。图表库真实加载效果和真实数据接口的连通性，需要你在自己能上网的设备上第一次打开时帮忙确认。</p>
+
+      <h3>🐛 实测踩坑记录（持续更新，截至 2026-08-14）</h3>
+      <p>这里统一汇总迄今为止<b>真机/浏览器实测中真实复现</b>的bug（不含"理论上可能有风险"这类猜测），
+      方便后续对照复测；每条都标了当前状态。</p>
+      <table>
+        <tr><th>#</th><th>方案</th><th>问题</th><th>根因</th><th>状态</th></tr>
+        <tr>
+          <td>1</td>
+          <td>klinecharts</td>
+          <td>图表区域完全空白，加载失败</td>
+          <td>CDN URL 路径写错：用的是 <code>dist/klinecharts.min.js</code>，v10 实际发布路径是 <code>dist/umd/klinecharts.min.js</code></td>
+          <td><span class="tag good">已修复</span></td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>klinecharts</td>
+          <td>控制台报错 <code>applyNewData is not a function</code></td>
+          <td>v10 彻底移除了v9的 <code>applyNewData()/updateData()</code> 直接推数据的方式，改成 <code>setDataLoader({getBars, subscribeBar, unsubscribeBar})</code> 拉取式模型，是版本升级带来的breaking change，不是笔误</td>
+          <td><span class="tag good">已修复</span></td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>ECharts</td>
+          <td>放大后点"下一根"，缩放比例被重置回默认</td>
+          <td><code>pushOne/popOne/setTheme</code> 每次都用硬编码的默认 <code>dataZoom</code> 区间重新 <code>buildOption()</code>，把用户手动缩放状态覆盖掉了</td>
+          <td><span class="tag good">已修复</span>（新增 <code>getCurrentZoom()</code> 读取当前缩放并透传回 <code>buildOption</code>）</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>klinecharts</td>
+          <td><b>取消勾选任意一个副图指标（哪怕只是叠加在主图上的BOLL），VOL/MACD/KDJ/成交额等全部副图会一起消失</b>，ECharts和Lightweight Charts同样操作都正常</td>
+          <td>v10 <code>removeIndicator()</code> 真实签名是单个filter对象 <code>{id?, name?, paneId?}</code>，旧代码按"猜测的常见风格"写成了 <code>removeIndicator(paneId, name)</code> 两个位置参数——第一个字符串参数被当成filter对象整体解构，三个字段全读出undefined，等价于"不加任何过滤条件"，触发库内部"清空全部指标"的行为</td>
+          <td><span class="tag good">已修复</span>（改用 <code>removeIndicator({id: 创建时返回的indicator id})</code> 精确指定要删除的单个指标；同时把 <code>createIndicator</code> 的返回值保存下来作为id，overlay和独立pane两种指标都覆盖到）</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>klinecharts</td>
+          <td><b>成交量/成交额柱子整个消失，不再显示为柱状</b>，ECharts/Lightweight Charts同样想做"红空心/绿实心"效果没有这个问题</td>
+          <td>为了做"涨（红）空心、跌（绿）实心"，把全局指标样式 <code>indicator.bars[0].style</code> 直接改成了 <code>'stroke'</code>，但没有同时设置 <code>borderColor</code>——klinecharts渲染柱状指标图形时，<code>style==='stroke'</code> 只会画 <code>borderColor</code>，不设的话默认是透明色，等价于"什么都不画"，柱子因此整根消失</td>
+          <td><span class="tag good">已修复</span>（改用 <code>registerIndicator</code> 覆盖内置VOL、并同步调整自定义AMOUNT，通过 <code>figures[].styles</code> 回调按每根数据的涨跌单独返回 <code>{style, color, borderColor}</code>：跌用 <code>style:'fill'</code> 实心，涨用 <code>style:'stroke'</code> 且显式给 <code>borderColor</code>，和主图K线的空心/实心规则保持一致）</td>
+        </tr>
+      </table>
+      <p><b>诚实说明：</b>之前给klinecharts"显示/隐藏切换"打4分时，已经在备注里写了"v10的id/paneId获取方式没有100%确认，实测前留有一点不确定性"——但这只是提示了不确定性，没有真正拦住这个bug上线，说明"看官方文档写代码"和"过一遍真实点击交互"之间必须要有实测这一步，光凭读文档打分是不够的。上面表格第4、5条都已经在评分表里体现为扣分，后续任何新发现的真实bug都会同样处理：先如实记录，再看是否需要调整对应维度的分数。</p>
+
+      <h3>📊 新增：副图指标显示/隐藏——三方案难度评分</h3>
+      <p>评分标准统一为1-5分（5分=最省事），四个维度：① <b>内置支持度</b>——库本身有没有现成的KDJ/BOLL/MACD；
+      ② <b>显示隐藏切换</b>——做"点一下按钮显示或隐藏某个指标"这个交互，API是不是天生就支持；
+      ③ <b>自定义指标难度</b>——成交额这种库里没有的指标，扩展机制好不好用；
+      ④ <b>布局自适应</b>——副图数量变化时，图表高度/分区要不要自己手动重新计算。</p>
+      <table>
+        <tr><th>维度</th><th>klinecharts</th><th>ECharts</th><th>Lightweight Charts</th></tr>
+        <tr>
+          <td>内置支持度</td>
+          <td><span class="tag good">5分</span> MA/VOL/MACD/KDJ/BOLL全部内置，一行 <code>createIndicator('KDJ')</code> 就有</td>
+          <td><span class="tag bad">2分</span> 都没有，KDJ/BOLL/MACD全部要自己写公式计算（本demo已经全部手算好了）</td>
+          <td><span class="tag bad">1分</span> 零内置，连最基础的MA都要自己算，是三个里最"裸"的</td>
+        </tr>
+        <tr>
+          <td>显示/隐藏切换</td>
+          <td><span class="tag bad">3分（实测踩过真实bug，已修复）</span> <code>createIndicator</code>/<code>removeIndicator</code> 本身能力是有的，但之前一版代码把v10的 <code>removeIndicator</code> 错误当成 <code>removeIndicator(paneId, name)</code> 两个位置参数调用——真实签名其实是<b>单个filter对象</b> <code>removeIndicator({id?, name?, paneId?})</code>。传两个位置参数时，第一个字符串参数会被当成整个filter对象解构，id/name/paneId全部读出undefined，等价于"无过滤条件"，导致取消勾选<b>任意一个</b>指标（哪怕只是叠加在主图上的BOLL）都会把VOL/MACD/KDJ/成交额等已创建的副图<b>全部清空</b>——这是实测中真实复现、而不是猜测的bug，已改用 <code>removeIndicator({id: 创建时返回的indicator id})</code> 精确删除单个指标修复。扣1分是因为这类"位置参数 vs 单filter对象"的签名差异，官方指南页面本身没有明确写全，容易在没有真机验证的情况下踩坑。</td>
+          <td><span class="tag warn">3分</span> 没有开关API，靠整体重建option实现，逻辑不难但要小心别把用户缩放状态重置了（这次真踩过一次坑）</td>
+          <td><span class="tag good">5分</span> 每个指标就是独立的series对象，<code>series.applyOptions({visible:false})</code> 一行搞定，三个里最简单</td>
+        </tr>
+        <tr>
+          <td>自定义指标（成交额）</td>
+          <td><span class="tag good">4分</span> 官方有专门的 <code>registerIndicator()</code> 扩展机制，但要学一套新的配置格式，有一定上手成本</td>
+          <td><span class="tag good">4分</span> 就是再加一个bar系列，用已有数据直接画，反而是三个里最直白的</td>
+          <td><span class="tag good">4分</span> 同样是再加一个Histogram系列，和ECharts难度相当</td>
+        </tr>
+        <tr>
+          <td>布局自适应</td>
+          <td><span class="tag good">5分</span> 副图开关会自动新增/移除pane，高度自己重新分布，完全不用管</td>
+          <td><span class="tag bad">2分</span> 副图数量一变，grid行数、每个xAxis/yAxis绑定的gridIndex、dataZoom联动范围全部要重新算，本demo这块代码量最大</td>
+          <td><span class="tag warn">3分</span> pane高度要手动分配；本demo为了省事选了"关闭的副图收起成一条30px窄条"而不是真的移除pane，视觉上不如klinecharts干净，但实现简单很多（官方其实提供 <code>removePane()</code>，真要做到和klinecharts一样干净是可以做到的，只是要多写状态管理代码）</td>
+        </tr>
+        <tr>
+          <td><b>综合平均分</b></td>
+          <td><b><span class="tag warn">4.25（2026-08-14 因实测踩坑从4.5下调）</span></b></td>
+          <td><b><span class="tag warn">2.75</span></b></td>
+          <td><b><span class="tag warn">3.25</span></b></td>
+        </tr>
+      </table>
+      <p>结论没变，但要澄清一点：klinecharts分数高<b>不代表它没bug</b>，恰恰相反——三个方案里真实踩到的、会导致功能整体损坏的bug目前<b>全部出在klinecharts身上</b>（CDN路径404、v9→v10的数据接入API整体替换、removeIndicator签名误用、以及这次的成交量柱style='stroke'不设borderColor导致柱子消失），而且都是那种"照着旧写法/字面理解写代码，实际跑起来才会暴露"的坑，说明klinecharts v10文档和实际API之间的匹配度还有改进空间，选它意味着要预留更多"实测验证+读源码"的时间成本，不能只看官方指南就下结论。ECharts和Lightweight Charts这次实测下来反而更"老实"——ECharts虽然工作量最大，但API都是文档写什么就是什么，目前只在zoom状态保留上踩过一次坑；Lightweight Charts至今没有出现过一次因为API签名理解错误导致的功能性bug（但受限于HistogramSeries没有border字段，成交量/成交额做不出真正的空心柱，这是引擎能力局限不是bug）。如果最终选型除了"长期加指标的工作量"外，还很看重"betting on一个API稳定、文档可信度高的库"，这一条要重新纳入权衡，不能只看综合平均分的数字高低。</p>
+
+      <h3>⚖️ 性能与知识产权授权评估（面向本地化部署场景，2026-08-14新增）</h3>
+      <p><b>前提说明：</b>本节评估假设最终产品采用<b>本地化部署</b>（自建服务器/内网环境，非依赖外部CDN）：图表库以 <code>npm install</code> 依赖形式打包进自己的前端构建产物，不像本demo为了跨环境测试方便而运行时动态加载多镜像CDN。这意味着前面记录的"CDN镜像加载失败"这类风险在正式生产环境中基本不存在；本节评估的是库本身打包后的运行时性能，以及知识产权/授权合规风险。</p>
+      <table>
+        <tr><th></th><th>klinecharts</th><th>ECharts</th><th>Lightweight Charts</th></tr>
+        <tr>
+          <td>开源许可证</td>
+          <td colspan="3"><span class="tag good">三者核心代码许可证都是 Apache License 2.0</span>（允许商用、允许修改和分发，需保留版权声明，不是强传染式开源协议，不要求开放使用方自己的代码）</td>
+        </tr>
+        <tr>
+          <td>商用是否需付费</td>
+          <td><span class="tag good">否</span></td>
+          <td><span class="tag good">否</span>（Apache软件基金会顶级项目）</td>
+          <td><span class="tag good">否</span></td>
+        </tr>
+        <tr>
+          <td>附加UI归属要求</td>
+          <td><span class="tag good">无</span>，官方README仅说明"Apache License V2"，未提及需在界面上显示水印或另付商业授权费</td>
+          <td><span class="tag good">无</span>，三者中协议最"干净"，不需要任何运行时UI展示义务</td>
+          <td><span class="tag bad">有（重点！）</span> —— 官方LICENSE明确要求：必须在用户可见的页面/App中添加"由 TradingView 提供技术支持"的归属声明，并附 tradingview.com 链接（可用官方提供的 <code>attributionLogo</code> 图表选项在图表本身展示来满足此要求，但依然是<b>强制可见</b>、不能隐藏）</td>
+        </tr>
+        <tr>
+          <td>包体积（gzip，计入产品构建体积）</td>
+          <td><span class="tag good">较小，官方宣称约40KB</span>，专为K线场景设计，天然轻量</td>
+          <td><span class="tag warn">全量引入较大（300-400KB+）</span>，但支持按需引入（只打包Canvas渲染器+K线/柱状/折线系列+Grid+DataZoom等），实际项目通常能压到100KB量级，需团队自己维护按需引入清单</td>
+          <td><span class="tag good">最小，官方宣称约45KB</span>，专为金融图表设计，三者中"每KB换取的金融图表能力"性价比最高</td>
+        </tr>
+        <tr>
+          <td>高频逐根/逐tick更新性能（面向未来接真实行情）</td>
+          <td><span class="tag warn">较好</span>，但本demo用的推送式API较新，长期高频推送场景下的稳定性还缺乏大规模生产验证</td>
+          <td><span class="tag bad">较弱</span>，本demo采用的"每次setOption全量重建"策略会随数据量/更新频率增加而性能下降，生产环境必须换成增量更新API，需要额外工程投入</td>
+          <td><span class="tag good">最强</span>，TradingView自家实盘行情场景专门优化，支持十万级数据点+高频更新是其核心设计目标</td>
+        </tr>
+        <tr>
+          <td>移动端触摸手感</td>
+          <td colspan="2"><span class="tag warn">官方宣称支持，未做深入实测对比</span></td>
+          <td><span class="tag good">官方宣称支持且打磨较细</span>（TradingView自家产品长期打磨经验），但同样未在本项目里做过真机实测，需列入下一轮验证计划</td>
+        </tr>
+      </table>
+      <p><b>结论：</b>三者许可证都允许免费商用，不存在"用了就要交钱"的授权费问题，<b>主要差异集中在 Lightweight Charts 的强制品牌展示条款上</b>——这不是可选项，是开源许可证的一部分，不展示就等于违反许可证。如果金手指这类双盲测试训练平台不希望在训练界面上暴露"由TradingView提供"这类第三方工具来源（担心暴露测试工具技术栈、或与自身品牌调性冲突），需要产品/法务侧提前确认能否接受，或联系TradingView洽谈商业授权豁免该义务（会有额外成本和周期）。klinecharts和ECharts没有这个问题，可以完全"静默"集成。性能上，如果当前阶段只是"点击逐根回放"（非高频实时行情），三者性能都够用，不是当前选型的瓶颈；但如果未来产品要接入真实盘口的高频推送，Lightweight Charts的性能设计目标最贴合这个场景。<br/><i>以上信息根据2026年8月官方仓库LICENSE/README整理，不构成法律意见，正式采用前建议由法务/知识产权同事复核最新版本的许可证条款。</i></p>
+
+      <h3>建议的下一步</h3>
+      <p>重点看 📊 三方案对比 页签：三个图表实时并排渲染，是判断视觉效果、渲染质量最直接的方式；
+      有余力的话点一下"🌐 尝试加载真实历史数据"看看能不能拉到真实行情；这版新加的"副图指标"按钮栏，
+      点几下KDJ/BOLL/成交额，看三个方案下效果是否都正常、切换会不会报错。
+      任何一步不对，把图表区域里显示的文字截图发我，我照着定位修。</p>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ============================================================
+   1. 数据层：可复现的模拟 OHLCV + MA + MACD（全部前端本地生成）
+   ============================================================ */
+
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function generateOHLCV(n, seed){
+  const rng = mulberry32(seed);
+  const dayMs = 86400000;
+  let start = Date.UTC(2020, 0, 1);
+  let price = 10 + rng() * 5;
+  const bars = [];
+  for (let i = 0; i < n; i++){
+    const drift = (rng() - 0.5) * 0.07;
+    const open = price;
+    let close = open * (1 + drift);
+    if (close < 0.5) close = 0.5 + rng();
+    const high = Math.max(open, close) * (1 + rng() * 0.018);
+    const low = Math.min(open, close) * (1 - rng() * 0.018);
+    const volume = Math.round(800 + rng() * 12000);
+    bars.push({
+      timestamp: start + i * dayMs,
+      open: +open.toFixed(2),
+      high: +high.toFixed(2),
+      low: +low.toFixed(2),
+      close: +close.toFixed(2),
+      volume,
+      amount: Math.round(close * volume) // 成交额：真实数据源一般会直接给，这里没有就用 close*volume 近似
+    });
+    price = close;
+  }
+  return bars;
+}
+
+function calcMA(bars, period){
+  const out = new Array(bars.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < bars.length; i++){
+    sum += bars[i].close;
+    if (i >= period) sum -= bars[i - period].close;
+    if (i >= period - 1) out[i] = +(sum / period).toFixed(3);
+  }
+  return out;
+}
+
+function calcEMA(values, period){
+  const k = 2 / (period + 1);
+  const out = new Array(values.length).fill(null);
+  let prev = null;
+  for (let i = 0; i < values.length; i++){
+    if (prev === null){ prev = values[i]; }
+    else { prev = values[i] * k + prev * (1 - k); }
+    out[i] = prev;
+  }
+  return out;
+}
+
+function calcMACD(bars, short = 12, long = 26, signal = 9){
+  const closes = bars.map(b => b.close);
+  const emaShort = calcEMA(closes, short);
+  const emaLong = calcEMA(closes, long);
+  const dif = closes.map((_, i) => +(emaShort[i] - emaLong[i]).toFixed(4));
+  const dea = calcEMA(dif, signal).map(v => +v.toFixed(4));
+  const macd = dif.map((d, i) => +((d - dea[i]) * 2).toFixed(4));
+  return { dif, dea, macd };
+}
+
+/** KDJ随机指标：RSV基于N日最高/最低，K/D是对RSV的移动平均，J是KD的线性放大。 */
+function calcKDJ(bars, n = 9, m1 = 3, m2 = 3){
+  const k = new Array(bars.length).fill(null);
+  const d = new Array(bars.length).fill(null);
+  const j = new Array(bars.length).fill(null);
+  let prevK = 50, prevD = 50;
+  for (let i = 0; i < bars.length; i++){
+    if (i < n - 1) continue;
+    let hh = -Infinity, ll = Infinity;
+    for (let x = i - n + 1; x <= i; x++){ hh = Math.max(hh, bars[x].high); ll = Math.min(ll, bars[x].low); }
+    const rsv = hh === ll ? 50 : ((bars[i].close - ll) / (hh - ll)) * 100;
+    const kv = (prevK * (m1 - 1) + rsv) / m1;
+    const dv = (prevD * (m2 - 1) + kv) / m2;
+    k[i] = +kv.toFixed(3); d[i] = +dv.toFixed(3); j[i] = +(3 * kv - 2 * dv).toFixed(3);
+    prevK = kv; prevD = dv;
+  }
+  return { k, d, j };
+}
+
+/** 布林带：中轨=N日MA，上/下轨=中轨 ± k倍标准差。 */
+function calcBOLL(bars, n = 20, k = 2){
+  const mid = calcMA(bars, n);
+  const upper = new Array(bars.length).fill(null);
+  const lower = new Array(bars.length).fill(null);
+  for (let i = n - 1; i < bars.length; i++){
+    let sumSq = 0;
+    for (let x = i - n + 1; x <= i; x++){ sumSq += Math.pow(bars[x].close - mid[i], 2); }
+    const std = Math.sqrt(sumSq / n);
+    upper[i] = +(mid[i] + k * std).toFixed(3);
+    lower[i] = +(mid[i] - k * std).toFixed(3);
+  }
+  return { mid, upper, lower };
+}
+
+let DATA = null; // {bars, ma5, ma10, ma30, dif, dea, macd, kdjK/D/J, bollMid/Upper/Lower, amount}
+
+function buildDataFromBars(bars){
+  const ma5 = calcMA(bars, 5);
+  const ma10 = calcMA(bars, 10);
+  const ma30 = calcMA(bars, 30);
+  const { dif, dea, macd } = calcMACD(bars);
+  const { k: kdjK, d: kdjD, j: kdjJ } = calcKDJ(bars);
+  const { mid: bollMid, upper: bollUpper, lower: bollLower } = calcBOLL(bars);
+  const amount = bars.map(b => b.amount != null ? b.amount : Math.round(b.close * b.volume));
+  return { bars, ma5, ma10, ma30, dif, dea, macd, kdjK, kdjD, kdjJ, bollMid, bollUpper, bollLower, amount };
+}
+
+function buildData(total, seed){
+  return buildDataFromBars(generateOHLCV(total, seed));
+}
+
+/* ---------- 可选：尝试拉取真实历史行情（失败自动回退模拟数据，不阻塞demo） ----------
+   数据源：stooq.com 的公开CSV导出接口，免key，格式 Date,Open,High,Low,Close,Volume。
+   注意：该接口是否支持跨域直接fetch、是否在用户所在网络可达，取决于用户自己的浏览器环境，
+   本demo运行环境无法代为验证；失败会在诊断日志里明确报出原因，并自动保留/回退到模拟数据，
+   不会导致图表空白。 */
+async function fetchRealHistoricalData(symbol, count){
+  const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(symbol)}&i=d`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  let text;
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    text = await resp.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+  const lines = text.trim().split('\n').filter(Boolean);
+  if (lines.length < 30 || !/date/i.test(lines[0])) throw new Error('返回内容不是预期的CSV格式（可能被重定向到了错误页/跨域被拦截）');
+  const rows = lines.slice(1).map(line => {
+    const [date, open, high, low, close, volume] = line.split(',');
+    const vol = Math.round(+volume || 0);
+    return {
+      timestamp: Date.parse(date + 'T00:00:00Z'),
+      open: +open, high: +high, low: +low, close: +close,
+      volume: vol,
+      amount: Math.round(+close * vol) // stooq不直接给成交额，同样用 close*volume 近似
+    };
+  }).filter(b => Number.isFinite(b.timestamp) && Number.isFinite(b.close));
+  if (rows.length < 30) throw new Error('有效数据行数过少');
+  const slice = rows.slice(Math.max(0, rows.length - count));
+  return slice;
+}
+
+/* ============================================================
+   2. 全局状态机
+   ============================================================ */
+
+const state = {
+  total: 300,
+  initial: 220,
+  revealCount: 220,
+  engine: 'kline',
+  theme: 'tdx', // 默认启动就是"通达信"风格黑底配色；点击右上角按钮可在 tdx→dark→light 之间循环切换
+  seed: 20260814,
+  dataSource: 'simulated', // 'simulated' | 'real:<symbol>'
+  // 副图指标显示状态，三个引擎共用同一份开关状态，方便横向对比切换体验
+  indicators: { vol: true, macd: true, kdj: false, boll: false, amount: false }
+};
+
+const INDICATOR_META = {
+  vol:    { label: '成交量', kind: 'pane' },
+  macd:   { label: 'MACD',  kind: 'pane' },
+  kdj:    { label: 'KDJ',   kind: 'pane' },
+  amount: { label: '成交额', kind: 'pane' },
+  boll:   { label: 'BOLL',  kind: 'pane' } // 独立副图显示（不再叠加在主图价格区）
+};
+
+const $ = (id) => document.getElementById(id);
+
+function log(msg, cls){
+  const el = $('diag');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  line.textContent = `[${t}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  while (el.children.length > 200) el.removeChild(el.firstChild);
+}
+
+window.addEventListener('error', (e) => {
+  log(`JS错误: ${e.message} @ ${e.filename}:${e.lineno}`, 'err');
+});
+
+/* ============================================================
+   2.5 图表库动态加载：多镜像自动重试
+   之前用静态 <script src="https://cdn.jsdelivr.net/..."> 直接引入，
+   在国内网络环境下 jsdelivr / unpkg 经常连不上，会导致三个库全部
+   ReferenceError、图表区域整片空白且不易察觉。现在改成运行时按顺序
+   尝试多个镜像，并把加载状态直接显示在每个图表区域里（加载中/失败原因），
+   而不是只写进底部不显眼的诊断日志。
+   ============================================================ */
+
+const LIB_SOURCES = {
+  kline: {
+    check: () => typeof window.klinecharts !== 'undefined',
+    urls: [
+      // 注意：v10 起真实产物路径带了一层 /umd/，写成 dist/klinecharts.min.js 是404——
+      // 之前一直加载失败的根因之一就是这个路径错了，和网络/CSP无关。
+      'https://registry.npmmirror.com/klinecharts/10.0.2/files/dist/umd/klinecharts.min.js',
+      'https://cdn.jsdelivr.net/npm/klinecharts@10.0.2/dist/umd/klinecharts.min.js',
+      'https://unpkg.com/klinecharts@10.0.2/dist/umd/klinecharts.min.js'
+    ]
+  },
+  echarts: {
+    check: () => typeof window.echarts !== 'undefined',
+    urls: [
+      'https://registry.npmmirror.com/echarts/6.1.0/files/dist/echarts.min.js',
+      'https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js',
+      'https://unpkg.com/echarts@6.1.0/dist/echarts.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js'
+    ]
+  },
+  lwc: {
+    check: () => typeof window.LightweightCharts !== 'undefined',
+    urls: [
+      'https://registry.npmmirror.com/lightweight-charts/5.2.1/files/dist/lightweight-charts.standalone.production.js',
+      'https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js',
+      'https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js'
+    ]
+  }
+};
+
+const libLoadPromises = {};
+const engineLabels = { kline: 'klinecharts', echarts: 'ECharts', lwc: 'Lightweight Charts', compare: '三方案对比' };
+const paneIdOf = { kline: 'pane-kline', echarts: 'pane-echarts', lwc: 'pane-lwc', compare: 'pane-compare' };
+
+function loadScriptOnce(url){
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('网络请求失败或超时'));
+    document.head.appendChild(s);
+  });
+}
+
+// 库加载中/加载失败的状态提示，同一个engineKey可能同时对应"主tab的大pane"和
+// "对比页签里的小格子"两个容器（比如从没去过echarts主tab、直接点进对比页签时，
+// echarts库还要现场加载），两处都要显示，不然某一边看起来会像"卡住不动"。
+function paneStatusTargets(engineKey){
+  return [paneIdOf[engineKey], compareContainerIdOf && compareContainerIdOf[engineKey]]
+    .filter(Boolean)
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+}
+
+function setPaneStatus(engineKey, html, isError){
+  paneStatusTargets(engineKey).forEach(pane => {
+    let statusEl = pane.querySelector('.pane-status');
+    if (!statusEl) {
+      statusEl = document.createElement('div');
+      statusEl.className = 'pane-status';
+      pane.appendChild(statusEl);
+    }
+    statusEl.className = 'pane-status' + (isError ? ' error' : '');
+    statusEl.innerHTML = html;
+  });
+}
+
+function clearPaneStatus(engineKey){
+  paneStatusTargets(engineKey).forEach(pane => {
+    const statusEl = pane.querySelector('.pane-status');
+    if (statusEl) statusEl.remove();
+  });
+}
+
+/** 依次尝试该引擎的所有CDN镜像，只加载一次并缓存结果（成功或失败都缓存，避免反复重试拖慢切换）。 */
+function ensureLib(engineKey){
+  if (libLoadPromises[engineKey]) return libLoadPromises[engineKey];
+  const { urls, check } = LIB_SOURCES[engineKey];
+  const label = engineLabels[engineKey];
+
+  libLoadPromises[engineKey] = (async () => {
+    if (check()) { log(`${label} 已在全局环境中就绪，跳过加载`, 'ok'); return true; }
+    const tried = [];
+    for (const url of urls) {
+      setPaneStatus(engineKey, `<div class="status-inner"><div class="spinner"></div>正在加载 ${label}…<br/><span style="font-size:11px;opacity:.7;">${new URL(url).host}</span></div>`, false);
+      try {
+        await loadScriptOnce(url);
+        if (check()) {
+          log(`${label} 加载成功：${url}`, 'ok');
+          clearPaneStatus(engineKey);
+          return true;
+        }
+        tried.push(`${url}（脚本已下载但未找到全局对象，可能是CSP拦截了执行）`);
+      } catch (e) {
+        tried.push(`${url}（${e.message}）`);
+      }
+      log(`${label} 源不可用，尝试下一个镜像…`, 'err');
+    }
+    const detail = tried.map((t, i) => `${i + 1}. ${t}`).join('<br/>');
+    log(`${label} 所有CDN镜像均加载失败`, 'err');
+    setPaneStatus(engineKey,
+      `<div class="status-inner">⚠️ ${label} 加载失败，已尝试 ${urls.length} 个镜像源均不可用：<br/>
+       <div style="text-align:left; font-size:11px; margin:8px 0; opacity:.85;">${detail}</div>
+       常见原因：① 当前网络访问不了这些CDN域名（比如内网/需要代理）；
+       ② 如果是在某个应用内嵌的预览面板里打开的，该面板可能限制了外部脚本加载。
+       建议：把这个HTML文件下载后，直接用手机/电脑上的正常浏览器（Chrome/Edge/Safari）打开试试。
+       <br/><button class="retry-btn" onclick="retryEngine('${engineKey}')">重试</button></div>`,
+      true);
+    return false;
+  })();
+
+  return libLoadPromises[engineKey];
+}
+
+function retryEngine(engineKey){
+  delete libLoadPromises[engineKey];
+  if (state.engine === engineKey) activateEngine(engineKey);
+}
+
+/* ============================================================
+   3. 图表引擎适配层：每个引擎实现同一组接口
+   init(container, theme) / setTheme(theme) / loadInitial(count) /
+   pushOne(index) / popOne() / resize() / destroy()
+   ============================================================ */
+
+// 通达信经典黑底配色，三个图表引擎共用同一份色值，保证同一套主题在三个方案里视觉一致。
+// 说明：通达信没有对外公开的官方色值表，这里用的是"仿通达信"皮肤业界普遍采用的近似值——
+// 黑底、红涨绿跌（中国习惯，和本demo其它主题一致）、均线/KDJ/MACD用白/黄/紫这套经典三色。
+// 如果你手头有公司内部实际用的色值表，直接改这里几个hex就能全局生效。
+const TDX_PALETTE = {
+  up: '#FF3232', down: '#00CC66',
+  ma: ['#FFFFFF', '#FFD400', '#DA70D6'],     // MA5 白 / MA10 黄 / MA30 紫
+  kdj: ['#FFFFFF', '#FFD400', '#DA70D6'],    // K 白 / D 黄 / J 紫
+  macdLine: ['#FFFFFF', '#FFD400'],          // DIF 白 / DEA 黄
+  macdHist: '#00E5FF',                       // MACD柱状值现在改画成一根细线，用青色和DIF/DEA区分开
+  boll: ['#FFD400', '#FFFFFF', '#FFD400']    // 上轨黄虚线 / 中轨白 / 下轨黄虚线（现在单独占一个副图）
+};
+
+function hexToRgba(hex, alpha){
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+const Engines = {};
+
+/* ---------- 方案一：klinecharts ----------
+   写成工厂函数而不是单例IIFE，是为了给"三方案对比"页签用——对比页签需要在另一组独立的
+   容器里，同时再渲染一份klinecharts/ECharts/Lightweight Charts，如果还是单例，
+   两边会共用同一个chart闭包变量，互相抢容器、状态打架。每次调用createKlineEngine()
+   都会拿到一份全新的、互不干扰的chart/series闭包状态。 */
+function createKlineEngine(){
+  let chart = null;
+
+  function styleFor(theme){
+    const dark = theme === 'dark';
+    const tdx = theme === 'tdx';
+    const up = tdx ? TDX_PALETTE.up : '#F5222D';
+    const down = tdx ? TDX_PALETTE.down : '#16A34A';
+    return {
+      grid: {
+        horizontal: { color: tdx ? '#1a1a1a' : (dark ? '#242938' : '#eceef3') },
+        vertical: { color: tdx ? '#1a1a1a' : (dark ? '#242938' : '#eceef3') }
+      },
+      candle: {
+        // candle_up_stroke 是klinecharts官方内置的蜡烛类型（不是自己拿透明色硬凑的），
+        // 效果就是"涨（红）空心、跌（绿）实心"——官方v9示例页面里这个类型按钮标的是
+        // "涨空心-Up stroke"，正好对应这次要的效果，不用自己拿透明填充色去模拟。
+        type: 'candle_up_stroke',
+        bar: {
+          upColor: up, downColor: down,
+          noChangeColor: '#888888',
+          upBorderColor: up, downBorderColor: down,
+          upWickColor: up, downWickColor: down
+        },
+        priceMark: {
+          last: { upColor: up, downColor: down }
+        },
+        tooltip: {
+          text: { color: tdx ? '#d9d9d9' : (dark ? '#c7cbe0' : '#43485a') }
+        }
+      },
+      // klinecharts的指标配色是全局共享的一套（bars给VOL/AMOUNT这类柱状指标用，
+      // lines是一组5个预置颜色，MA/KDJ/BOLL/MACD细线等线状指标按声明顺序从这里取色）。
+      // 通达信经典配色下 MA5/K/DIF 用白，MA10/D/DEA 用黄，MA30/J 用紫，
+      // 正好是"仿通达信"皮肤里最常见的那套三色，所以几个指标共用同一份lines完全没问题。
+      // bars这里保持默认的'fill'（实心）——真正"涨（红）空心、跌（绿）实心"的效果，是在下面
+      // 自定义注册的VOL/AMOUNT指标里通过figures[].styles回调按每根数据单独返回的（见
+      // ensureVolIndicatorRegistered/ensureAmountIndicatorRegistered），不是靠这里的全局style。
+      // 之前直接把这里的全局bars.style改成'stroke'，结果成交量柱整个消失变成"不是柱子"了——
+      // 根因是klinecharts的drawRect在style='stroke'时只画borderColor，且默认borderColor是
+      // transparent（没设的话直接不画），而这里的全局style只给了upColor/downColor没给borderColor，
+      // 于是柱子既不填充也不描边，直接消失。这个bars配置现在只作为兜底默认值（这里保持'fill'实心），
+      // 真正的红空心/绿实心样式统一在自定义指标的styles回调里显式返回style+borderColor/color。
+      indicator: {
+        tooltip: { text: { color: tdx ? '#d9d9d9' : (dark ? '#c7cbe0' : '#43485a') } },
+        bars: [{ style: 'fill', borderStyle: 'solid', borderSize: 1, upColor: up, downColor: down, noChangeColor: '#888888' }],
+        lines: tdx ? [
+          { color: TDX_PALETTE.ma[0] },
+          { color: TDX_PALETTE.ma[1] },
+          { color: TDX_PALETTE.ma[2] },
+          { color: TDX_PALETTE.macdHist },
+          { color: '#FF9600' }
+        ] : [
+          { color: '#e6a23c' },
+          { color: '#a463f2' },
+          { color: '#3d7dff' },
+          { color: '#8b90a5' },
+          { color: '#01C5C4' }
+        ]
+      },
+      xAxis: {
+        axisLine: { color: tdx ? '#333333' : (dark ? '#333a4d' : '#dfe3ec') },
+        tickText: { color: tdx ? '#8c8c8c' : '#8b90a5' },
+        splitLine: { show: false }
+      },
+      yAxis: {
+        axisLine: { color: tdx ? '#333333' : (dark ? '#333a4d' : '#dfe3ec') },
+        tickText: { color: tdx ? '#8c8c8c' : '#8b90a5' }
+      },
+      separator: { color: tdx ? '#1a1a1a' : (dark ? '#2a2f3d' : '#e3e5ec') },
+      crosshair: {
+        horizontal: { text: { color: tdx ? '#0d0d0d' : (dark ? '#c7cbe0' : '#43485a') } },
+        vertical: { text: { color: tdx ? '#0d0d0d' : (dark ? '#c7cbe0' : '#43485a') } }
+      }
+    };
+  }
+
+  function toBar(b){
+    return { timestamp: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, amount: b.amount };
+  }
+
+  // v10 彻底改了数据接入方式：不再有 applyNewData()/updateData() 这两个直接方法，
+  // 改成 setDataLoader({ getBars, subscribeBar, unsubscribeBar }) 这种"拉取式"数据源模式——
+  // 图表内部什么时候要数据，会自己调 getBars 问你要；"下一根"这种主动推送，
+  // 则是先通过 subscribeBar 拿到图表给你的 callback，之后你随时调这个 callback(bar) 就等于推一根新数据。
+  // 这是从官方 quick-start 文档里确认下来的真实用法（旧版本demo里用的 applyNewData 在v10已经不存在了）。
+  let containerId = null;
+  let barPushCallback = null;
+  let pendingCount = 0;
+
+  // 内置指标 VOL/KDJ + 两个用 registerIndicator 注册的自定义指标："成交额"（库里没有的指标），
+  // 以及"MACD_LINE"（把库内置MACD指标的柱状图部分换成细线——klinecharts内置MACD是DIF/DEA两条线
+  // 加一个柱状histogram，柱子的type是指标定义写死的，没有"改成线"的开关，所以要显示全线状的MACD，
+  // 只能自己注册一个同名效果的指标，公式复用顶部的 calcMACD()，保证和另外两个引擎数值完全一致）。
+  // BOLL 现在也不再叠加在主图上，改成和VOL/KDJ一样占独立副图（部署方要求"BOLL作为副图显示"）。
+  // klinecharts的优势在这里最明显：createIndicator/removeIndicator 本身就是"显示/隐藏"的完整实现，
+  // 不需要像ECharts那样手动重算grid布局。
+  const INDICATOR_DEFS = {
+    vol:    { name: 'VOL', custom: true },
+    macd:   { name: 'MACD_LINE', custom: true },
+    kdj:    { name: 'KDJ' },
+    boll:   { name: 'BOLL' },
+    amount: { name: 'AMOUNT', custom: true }
+  };
+  let createdIndicators = {}; // key -> { paneId, name }
+  let volRegistered = false;
+  let amountRegistered = false;
+  let macdLineRegistered = false;
+
+  // 涨（红）空心、跌（绿）实心这套figure.styles回调逻辑VOL和AMOUNT完全一样，抽出来共用。
+  // 参考的是klinecharts内置VOL指标自己的实现方式（src/extension/indicator/volume.ts的
+  // getVolumeFigure()）：styles回调参数是 { data, indicator, defaultStyles }，data.current
+  // 就是calc()算出来的当前这一条数据（这里在calc里把open/close也一起塞进去，方便这里直接比较），
+  // defaultStyles.bars[0].upColor/downColor 就是上面styleFor()里配的主题色，回调里读它们
+  // 而不是自己另存一份颜色，这样切换明暗/通达信主题时会自动跟着变，不用额外处理。
+  function directedBarStyles({ data, defaultStyles }){
+    const current = data && data.current;
+    const upColor = defaultStyles.bars[0].upColor;
+    const downColor = defaultStyles.bars[0].downColor;
+    if (!current || current.close === current.open) {
+      return { style: 'fill', color: defaultStyles.bars[0].noChangeColor };
+    }
+    if (current.close > current.open) {
+      // 涨（红）：空心描边，和主图candle_up_stroke的红色空心蜡烛保持一致
+      return { style: 'stroke', borderColor: upColor, borderSize: 1, color: 'transparent' };
+    }
+    // 跌（绿）：实心填充
+    return { style: 'fill', color: downColor };
+  }
+
+  function ensureVolIndicatorRegistered(){
+    if (volRegistered) return;
+    try {
+      // 用同名'VOL'重新注册会直接覆盖klinecharts内置的VOL指标（registerIndicator没有
+      // 名称冲突保护，后注册的会覆盖indicators表里的同名条目），这样才能自定义
+      // "红空心/绿实心"这个内置VOL本身不支持的效果。
+      klinecharts.registerIndicator({
+        name: 'VOL',
+        shortName: '成交量',
+        series: 'volume',
+        figures: [{ key: 'volume', title: '成交量: ', type: 'bar', baseValue: 0, styles: directedBarStyles }],
+        calc: (dataList) => dataList.map(d => ({ open: d.open, close: d.close, volume: d.volume }))
+      });
+      volRegistered = true;
+    } catch(e){ log('klinecharts 自定义"成交量空心柱"指标注册失败: ' + e.message, 'err'); }
+  }
+
+  function ensureAmountIndicatorRegistered(){
+    if (amountRegistered) return;
+    try {
+      klinecharts.registerIndicator({
+        name: 'AMOUNT',
+        shortName: '成交额',
+        series: 'volume',
+        figures: [{ key: 'amount', title: '成交额: ', type: 'bar', baseValue: 0, styles: directedBarStyles }],
+        calc: (dataList) => dataList.map(d => ({ open: d.open, close: d.close, amount: d.amount }))
+      });
+      amountRegistered = true;
+    } catch(e){ log('klinecharts 自定义"成交额"指标注册失败: ' + e.message, 'err'); }
+  }
+
+  function ensureMacdLineIndicatorRegistered(){
+    if (macdLineRegistered) return;
+    try {
+      klinecharts.registerIndicator({
+        name: 'MACD_LINE',
+        shortName: 'MACD',
+        figures: [
+          { key: 'dif', title: 'DIF: ', type: 'line' },
+          { key: 'dea', title: 'DEA: ', type: 'line' },
+          { key: 'macd', title: 'MACD: ', type: 'line' }
+        ],
+        // 复用顶部数据层统一的 calcMACD()，保证和ECharts/Lightweight Charts两个引擎算出来的
+        // DIF/DEA/MACD数值完全一致，这里只是把柱状histogram换成了普通折线画法。
+        calc: (dataList) => {
+          const { dif, dea, macd } = calcMACD(dataList);
+          return dataList.map((d, i) => ({ dif: dif[i], dea: dea[i], macd: macd[i] }));
+        }
+      });
+      macdLineRegistered = true;
+    } catch(e){ log('klinecharts 自定义"MACD细线"指标注册失败: ' + e.message, 'err'); }
+  }
+
+  function applyIndicators(ind){
+    if (!chart) return;
+    Object.keys(INDICATOR_DEFS).forEach(key => {
+      const def = INDICATOR_DEFS[key];
+      const shouldShow = !!ind[key];
+      const already = createdIndicators[key];
+      if (shouldShow && !already) {
+        if (def.custom) {
+          if (key === 'amount') ensureAmountIndicatorRegistered();
+          else if (key === 'macd') ensureMacdLineIndicatorRegistered();
+          else if (key === 'vol') ensureVolIndicatorRegistered();
+        }
+        try {
+          if (def.overlay) {
+            const id = chart.createIndicator({ name: def.name, paneId: 'candle_pane' }, true);
+            createdIndicators[key] = { paneId: 'candle_pane', name: def.name, id };
+          } else {
+            const id = chart.createIndicator(def.name);
+            createdIndicators[key] = { paneId: id, name: def.name, id };
+          }
+        } catch(e){ log(`klinecharts 创建指标${def.name}失败: ${e.message}`, 'err'); }
+      } else if (!shouldShow && already) {
+        try {
+          // 真实bug记录（2026-08-14 实测发现）：v10 的 removeIndicator 签名其实是
+          // 单个 filter 对象 removeIndicator({ id?, name?, paneId? })，不是旧代码写的
+          // removeIndicator(paneId, name) 两个位置参数。之前那种调法，第一个参数(字符串)会被
+          // 当成整个filter对象来解构，id/name/paneId 全部读出 undefined——等价于"不带任何过滤条件"，
+          // 库内部把它理解为"清空所有指标"，所以每次取消勾选任意一个指标（哪怕只是BOLL这种叠加在主图上的），
+          // 都会把VOL/MACD/KDJ/成交额等所有已创建的副图指标一起删掉，副图全部消失。
+          // 用带id的filter对象精确指定"只删这一个"就不会误伤其它指标了。
+          const filter = already.id ? { id: already.id } : { paneId: already.paneId, name: already.name };
+          chart.removeIndicator(filter);
+        }
+        catch(e){ log(`klinecharts 移除指标${def.name}失败: ${e.message}`, 'err'); }
+        delete createdIndicators[key];
+      }
+    });
+  }
+
+  function attachDataLoader(count){
+    pendingCount = count;
+    chart.setDataLoader({
+      getBars: ({ callback }) => {
+        callback(DATA.bars.slice(0, pendingCount).map(toBar));
+      },
+      subscribeBar: ({ callback }) => { barPushCallback = callback; },
+      unsubscribeBar: () => { barPushCallback = null; }
+    });
+  }
+
+  function init(container, theme){
+    containerId = container.id;
+    chart = klinecharts.init(containerId);
+    createdIndicators = {};
+    try { chart.setStyles(styleFor(theme)); } catch(e){ log('klinecharts setStyles schema与预期不符（v10可能调整了字段名，主题会退化为默认皮肤，不影响功能）: ' + e.message, 'err'); }
+    try { chart.setSymbol({ ticker: 'DEMO' }); chart.setPeriod({ span: 1, type: 'day' }); }
+    catch(e){ log('klinecharts setSymbol/setPeriod异常: ' + e.message, 'err'); }
+    // Documented v10 pattern: createIndicator({name, paneId, calcParams?}, isStack)
+    try {
+      chart.createIndicator({ name: 'MA', paneId: 'candle_pane', calcParams: [5, 10, 30] }, true);
+    } catch(e){
+      log('klinecharts MA叠加失败，尝试无calcParams的简化调用: ' + e.message, 'err');
+      try { chart.createIndicator({ name: 'MA', paneId: 'candle_pane' }, true); }
+      catch(e2){ log('klinecharts MA完全失败: ' + e2.message, 'err'); }
+    }
+    log('klinecharts 初始化完成（MA叠加主图，其余副图指标按开关状态创建）', 'ok');
+  }
+
+  function setTheme(theme){
+    if (!chart) return;
+    chart.setStyles(styleFor(theme));
+  }
+
+  function loadInitial(count){
+    if (!chart) return;
+    attachDataLoader(count); // 重新setDataLoader会触发图表重新调用getBars，等于"重新铺数据"
+  }
+
+  function pushOne(index){
+    if (!chart) return;
+    if (typeof barPushCallback === 'function') {
+      barPushCallback(toBar(DATA.bars[index]));
+    } else {
+      log('klinecharts subscribeBar回调还没就绪，改用整体重铺兜底', 'err');
+      attachDataLoader(index + 1);
+    }
+  }
+
+  function popOne(){
+    // klinecharts的推送式API没有"撤回上一根"的概念，重新走一遍getBars相当于回退重铺。
+    loadInitial(state.revealCount);
+  }
+
+  function resize(){ if (chart) { try { chart.resize(); } catch(e){} } }
+  function destroy(){
+    if (!chart) return;
+    try {
+      // 官方文档里 dispose 是传容器id的静态方法：klinecharts.dispose(id)，不是chart实例方法。
+      if (typeof klinecharts.dispose === 'function' && containerId) klinecharts.dispose(containerId);
+      else if (typeof chart.dispose === 'function') chart.dispose();
+    } catch(e){ log('klinecharts dispose异常（不影响下次初始化）: ' + e.message, 'err'); }
+    chart = null;
+    barPushCallback = null;
+    createdIndicators = {};
+  }
+
+  return { init, setTheme, loadInitial, pushOne, popOne, resize, destroy, applyIndicators };
+}
+Engines.kline = createKlineEngine();
+
+/* ---------- 方案二：ECharts ---------- */
+function createEchartsEngine(){
+  let chart = null;
+
+  function colorSet(theme){
+    const dark = theme === 'dark';
+    const tdx = theme === 'tdx';
+    if (tdx) {
+      return {
+        bg: 'transparent', text: '#8c8c8c', split: '#1a1a1a', axisLine: '#333333',
+        up: TDX_PALETTE.up, down: TDX_PALETTE.down,
+        ma5: TDX_PALETTE.ma[0], ma10: TDX_PALETTE.ma[1], ma30: TDX_PALETTE.ma[2],
+        dif: TDX_PALETTE.macdLine[0], dea: TDX_PALETTE.macdLine[1], macdHist: TDX_PALETTE.macdHist,
+        kdjK: TDX_PALETTE.kdj[0], kdjD: TDX_PALETTE.kdj[1], kdjJ: TDX_PALETTE.kdj[2],
+        bollUpper: TDX_PALETTE.boll[0], bollMid: TDX_PALETTE.boll[1], bollLower: TDX_PALETTE.boll[2]
+      };
+    }
+    return {
+      bg: 'transparent',
+      text: dark ? '#8b90a5' : '#6b7280',
+      split: dark ? '#242938' : '#eceef3',
+      axisLine: dark ? '#333a4d' : '#dfe3ec',
+      up: '#F5222D', down: '#16A34A',
+      ma5: '#e6a23c', ma10: '#a463f2', ma30: '#3d7dff',
+      dif: '#e6a23c', dea: '#3d7dff', macdHist: '#8b90a5',
+      kdjK: '#e6a23c', kdjD: '#3d7dff', kdjJ: '#a463f2',
+      bollUpper: '#a463f2', bollMid: '#8b90a5', bollLower: '#a463f2'
+    };
+  }
+
+  function getCurrentZoom(){
+    if (!chart) return null;
+    try {
+      const opt = chart.getOption();
+      const dz = opt && opt.dataZoom && opt.dataZoom[0];
+      if (dz && typeof dz.start === 'number') return { start: dz.start, end: dz.end };
+    } catch(e){}
+    return null;
+  }
+
+  // ECharts没有"显示/隐藏指标"这种现成开关，只能整体重建option——所以这里最费工夫的部分
+  // 是"副图数量变化时，grid的行数、每个xAxis/yAxis绑定的gridIndex、dataZoom联动的xAxisIndex
+  // 全部要跟着重新计算"，这块和klinecharts的createIndicator/removeIndicator相比明显繁琐很多，
+  // 也是findings评分里ECharts"布局自适应"拿分较低的原因。
+  const SUBPANE_ORDER = ['vol', 'amount', 'boll', 'macd', 'kdj']; // BOLL现在也占独立副图（不再叠加在主图上）
+
+  function computeLayout(){
+    const subKeys = SUBPANE_ORDER.filter(k => state.indicators[k]);
+    const n = subKeys.length;
+    const top0 = 3, bottomReserved = 9, gap = 2;
+    const totalPct = 100 - top0 - bottomReserved;
+    const mainPct = n === 0 ? totalPct : Math.max(32, totalPct - n * 15 - n * gap);
+    const subPct = n === 0 ? 0 : Math.max(9, (totalPct - mainPct - gap * n) / n);
+    const grids = [{ left: 56, right: 16, top: top0 + '%', height: mainPct + '%' }];
+    let cursor = top0 + mainPct + gap;
+    subKeys.forEach(() => {
+      grids.push({ left: 56, right: 16, top: cursor + '%', height: subPct + '%' });
+      cursor += subPct + gap;
+    });
+    return { subKeys, grids };
+  }
+
+  function buildOption(count, theme, zoomState){
+    const c = colorSet(theme);
+    const { subKeys, grids } = computeLayout();
+    const gridCount = grids.length;
+    const dzStart = zoomState ? zoomState.start : (count > 120 ? 60 : 0);
+    const dzEnd = zoomState ? zoomState.end : 100;
+    const bars = DATA.bars.slice(0, count);
+    const dates = bars.map(b => new Date(b.timestamp).toISOString().slice(0, 10));
+    const ohlc = bars.map(b => [b.open, b.close, b.low, b.high]);
+
+    const xAxis = grids.map((g, i) => ({
+      type: 'category', data: dates, gridIndex: i,
+      axisLine: { lineStyle: { color: c.axisLine } },
+      axisLabel: i === gridCount - 1 ? { color: c.text, fontSize: 10 } : { show: false },
+      splitLine: { show: false },
+      axisTick: { show: i === gridCount - 1 }
+    }));
+    const yAxis = grids.map((g, i) => ({
+      scale: true, gridIndex: i,
+      splitLine: { show: i === 0, lineStyle: { color: c.split } },
+      axisLabel: { color: c.text, fontSize: 10 },
+      axisLine: { show: false }
+    }));
+
+    const series = [
+      // 涨（红）空心：fill色给transparent，只留边框/影线是红色；跌（绿）still实心填充，
+      // 和klinecharts那边用 candle_up_stroke 类型做出来的效果保持一致。
+      { name: 'K线', type: 'candlestick', data: ohlc, xAxisIndex: 0, yAxisIndex: 0,
+        itemStyle: { color: 'transparent', color0: c.down, borderColor: c.up, borderColor0: c.down, borderWidth: 1.2 } },
+      { name: 'MA5', type: 'line', data: DATA.ma5.slice(0, count), xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 1, color: c.ma5 } },
+      { name: 'MA10', type: 'line', data: DATA.ma10.slice(0, count), xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 1, color: c.ma10 } },
+      { name: 'MA30', type: 'line', data: DATA.ma30.slice(0, count), xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 1, color: c.ma30 } }
+    ];
+
+    // 成交量/成交额和主图K线保持同一套方向配色规则：涨（红）空心描边，跌（绿）实心填充。
+    // ECharts的bar系列原生支持每个数据点单独的itemStyle，所以能精确做到"红色描边、绿色实心"混合。
+    function directedBarItemStyle(isUp, upColor, downColor){
+      return isUp
+        ? { color: 'transparent', borderColor: upColor, borderWidth: 1 }   // 涨（红）：空心描边
+        : { color: downColor };                                            // 跌（绿）：实心填充
+    }
+
+    subKeys.forEach((key, idx) => {
+      const gi = idx + 1; // grid 0 是主图，副图从1开始
+      if (key === 'vol') {
+        const vols = bars.map(b => ({ value: b.volume, itemStyle: directedBarItemStyle(b.close >= b.open, c.up, c.down) }));
+        series.push({ name: '成交量', type: 'bar', data: vols, xAxisIndex: gi, yAxisIndex: gi, barWidth: '60%' });
+      } else if (key === 'amount') {
+        const amts = bars.map(b => ({ value: b.amount, itemStyle: directedBarItemStyle(b.close >= b.open, c.up, c.down) }));
+        series.push({ name: '成交额', type: 'bar', data: amts, xAxisIndex: gi, yAxisIndex: gi, barWidth: '60%' });
+      } else if (key === 'boll') {
+        // BOLL改成独立副图（不再叠加在K线主图上）
+        series.push(
+          { name: 'BOLL上轨', type: 'line', data: DATA.bollUpper.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.bollUpper, type: 'dashed' } },
+          { name: 'BOLL中轨', type: 'line', data: DATA.bollMid.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.bollMid } },
+          { name: 'BOLL下轨', type: 'line', data: DATA.bollLower.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.bollLower, type: 'dashed' } }
+        );
+      } else if (key === 'macd') {
+        // MACD的柱状histogram部分改成一根细线（不再用bar系列），DIF/DEA本来就是线不用改
+        series.push(
+          { name: 'DIF', type: 'line', data: DATA.dif.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.dif } },
+          { name: 'DEA', type: 'line', data: DATA.dea.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.dea } },
+          { name: 'MACD', type: 'line', data: DATA.macd.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.macdHist } }
+        );
+      } else if (key === 'kdj') {
+        series.push(
+          { name: 'K', type: 'line', data: DATA.kdjK.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.kdjK } },
+          { name: 'D', type: 'line', data: DATA.kdjD.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.kdjD } },
+          { name: 'J', type: 'line', data: DATA.kdjJ.slice(0, count), xAxisIndex: gi, yAxisIndex: gi, showSymbol: false, lineStyle: { width: 1, color: c.kdjJ } }
+        );
+      }
+    });
+
+    return {
+      backgroundColor: 'transparent',
+      animation: false,
+      textStyle: { color: c.text },
+      grid: grids,
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'cross' }, backgroundColor: theme === 'tdx' ? '#111111' : (theme === 'dark' ? '#1d212e' : '#fff'), borderColor: c.axisLine, textStyle: { color: c.text, fontSize: 11 } },
+      xAxis,
+      yAxis,
+      dataZoom: [
+        { type: 'inside', xAxisIndex: grids.map((g, i) => i), start: dzStart, end: dzEnd },
+        { type: 'slider', xAxisIndex: grids.map((g, i) => i), bottom: 0, height: 14, textStyle: { color: c.text, fontSize: 9 }, start: dzStart, end: dzEnd }
+      ],
+      series
+    };
+  }
+
+  function init(container, theme){
+    chart = echarts.init(container, null, { renderer: 'canvas' });
+    chart.setOption(buildOption(state.revealCount, theme));
+    log('ECharts 初始化完成（grid数量随开关的副图指标动态变化）', 'ok');
+  }
+
+  function applyIndicators(){
+    if (!chart) return;
+    // 副图数量可能变了（grid行数变化），这里必须notMerge=true整体重建，不能走pushOne那种局部merge，
+    // 否则旧的grid/axis残留对不上新的series会错位。
+    chart.setOption(buildOption(state.revealCount, state.theme, getCurrentZoom()), true);
+  }
+
+  function setTheme(theme){
+    if (!chart) return;
+    // 保留当前缩放范围，否则切主题也会把用户放大的视图弹回默认——同样的bug，一并修。
+    chart.setOption(buildOption(state.revealCount, theme, getCurrentZoom()), true);
+  }
+
+  function loadInitial(count){
+    if (!chart) return;
+    // 这里是"全新铺数据"场景（切tab/重置/重新生成），用默认缩放是对的，不传zoomState。
+    chart.setOption(buildOption(count, state.theme), true);
+  }
+
+  function pushOne(index){
+    // 关键修复：点"下一根"之前先读出用户当前实际缩放的区间，重建option时原样传回去，
+    // 不然每次setOption都会用默认的dzStart/dzEnd把用户刚放大的视图弹回去。
+    if (!chart) return;
+    chart.setOption(buildOption(index + 1, state.theme, getCurrentZoom()));
+  }
+
+  function popOne(){
+    if (!chart) return;
+    chart.setOption(buildOption(state.revealCount, state.theme, getCurrentZoom()), true);
+  }
+
+  function resize(){ if (chart) chart.resize(); }
+  function destroy(){ if (chart) { chart.dispose(); chart = null; } }
+
+  return { init, setTheme, loadInitial, pushOne, popOne, resize, destroy, applyIndicators };
+}
+Engines.echarts = createEchartsEngine();
+
+/* ---------- 方案三：Lightweight Charts ---------- */
+function createLwcEngine(){
+  let chart = null;
+  let series = {};
+
+  function themeOptions(theme){
+    const dark = theme === 'dark';
+    const tdx = theme === 'tdx';
+    return {
+      layout: {
+        background: { type: 'solid', color: 'transparent' },
+        textColor: tdx ? '#8c8c8c' : (dark ? '#8b90a5' : '#6b7280'),
+        panes: { separatorColor: tdx ? '#1a1a1a' : (dark ? '#242938' : '#eceef3'), separatorHoverColor: tdx ? '#333333' : (dark ? '#333a4d' : '#dfe3ec') }
+      },
+      grid: {
+        vertLines: { color: tdx ? '#141414' : (dark ? '#20242f' : '#f1f2f7') },
+        horzLines: { color: tdx ? '#141414' : (dark ? '#20242f' : '#f1f2f7') }
+      },
+      timeScale: { borderColor: tdx ? '#333333' : (dark ? '#333a4d' : '#dfe3ec') },
+      rightPriceScale: { borderColor: tdx ? '#333333' : (dark ? '#333a4d' : '#dfe3ec') },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+    };
+  }
+
+  // 三个方案共用同一份 TDX_PALETTE；light/dark 沿用demo原来的配色方案。
+  function seriesColorsFor(theme){
+    if (theme === 'tdx') return TDX_PALETTE;
+    return {
+      up: '#F5222D', down: '#16A34A',
+      ma: ['#e6a23c', '#a463f2', '#3d7dff'],
+      kdj: ['#e6a23c', '#3d7dff', '#a463f2'],
+      macdLine: ['#e6a23c', '#3d7dff'], macdHist: '#8b90a5',
+      boll: ['#a463f2', '#8b90a5', '#a463f2']
+    };
+  }
+
+  function toTime(ts){ return Math.floor(ts / 1000); }
+
+  // Lightweight Charts没有内置指标，也没有"createIndicator"这种一站式API，
+  // 但显示/隐藏本身极简单——每个系列都是独立对象，直接 series.applyOptions({visible}) 就行，
+  // 三个方案里这一步是最省事的。麻烦点在副图数量变化时的pane高度重新分配：
+  // 这里选择"固定N个pane、不用的收起到最小高度"而不是动态removePane/重建，
+  // 实现更简单，但代价是关掉的副图会留一条很窄的空白，不会像klinecharts那样完全消失。
+  // BOLL现在单独占一个pane（不再叠加在主图上），所以从4个副图pane扩到5个。
+  const PANE_INDEX = { vol: 1, amount: 2, boll: 3, macd: 4, kdj: 5 };
+
+  function init(container, theme){
+    chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      ...themeOptions(theme)
+    });
+
+    const p = seriesColorsFor(theme);
+    // 涨（红）空心：upColor给transparent，边框/影线保留红色；跌（绿）仍然实心填充。
+    // CandlestickSeriesOptions原生就有 borderUpColor/borderDownColor 这两个和填充色分开的字段，
+    // 不用自己拿透明色去hack边框，官方就支持"填充色"和"边框色"分开设置。
+    series.candle = chart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: 'transparent', downColor: p.down,
+      borderVisible: true, borderUpColor: p.up, borderDownColor: p.down,
+      wickUpColor: p.up, wickDownColor: p.down
+    }, 0);
+    series.ma5 = chart.addSeries(LightweightCharts.LineSeries, { color: p.ma[0], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 0);
+    series.ma10 = chart.addSeries(LightweightCharts.LineSeries, { color: p.ma[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 0);
+    series.ma30 = chart.addSeries(LightweightCharts.LineSeries, { color: p.ma[2], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 0);
+    // BOLL三条线现在画在自己的pane里（PANE_INDEX.boll），不再是0号主pane的叠加线
+    series.bollUpper = chart.addSeries(LightweightCharts.LineSeries, { color: p.boll[0], lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.boll);
+    series.bollMid   = chart.addSeries(LightweightCharts.LineSeries, { color: p.boll[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.boll);
+    series.bollLower = chart.addSeries(LightweightCharts.LineSeries, { color: p.boll[2], lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.boll);
+
+    // 说明：HistogramSeries在Lightweight Charts里官方API只有 color/base 两个字段
+    // （github源码 HistogramStyleOptions 确认过），没有border/描边选项，没法做出真正的空心柱，
+    // 这是这个库的真实能力局限，不是没做。之前这里用降低透明度的填充色去近似"空心"的视觉效果，
+    // 但半透明的红柱子看起来既不像空心也不像正常实心，效果反而更差；既然做不出真正的描边空心，
+    // 就不再硬凑视觉近似，涨（红）跌（绿）都用主题色正常实心显示（和主图K线的空心/实心区分
+    // 只在candle系列上体现，成交量/成交额受限于引擎能力暂时做不到）。
+    series.vol = chart.addSeries(LightweightCharts.HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.vol);
+    series.amount = chart.addSeries(LightweightCharts.HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.amount);
+
+    series.dif = chart.addSeries(LightweightCharts.LineSeries, { color: p.macdLine[0], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.macd);
+    series.dea = chart.addSeries(LightweightCharts.LineSeries, { color: p.macdLine[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.macd);
+    // MACD柱状histogram也改成一根细线，和DIF/DEA共用同一个pane
+    series.macd = chart.addSeries(LightweightCharts.LineSeries, { color: p.macdHist, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.macd);
+
+    series.kdjK = chart.addSeries(LightweightCharts.LineSeries, { color: p.kdj[0], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.kdj);
+    series.kdjD = chart.addSeries(LightweightCharts.LineSeries, { color: p.kdj[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.kdj);
+    series.kdjJ = chart.addSeries(LightweightCharts.LineSeries, { color: p.kdj[2], lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, PANE_INDEX.kdj);
+
+    log('Lightweight Charts 原生多Pane创建成功，单一chart实例自动同步十字光标与时间轴', 'ok');
+  }
+
+  function setTheme(theme){
+    if (!chart) return;
+    chart.applyOptions(themeOptions(theme));
+    const p = seriesColorsFor(theme);
+    try {
+      series.candle.applyOptions({
+        upColor: 'transparent', downColor: p.down,
+        borderVisible: true, borderUpColor: p.up, borderDownColor: p.down,
+        wickUpColor: p.up, wickDownColor: p.down
+      });
+      series.ma5.applyOptions({ color: p.ma[0] });
+      series.ma10.applyOptions({ color: p.ma[1] });
+      series.ma30.applyOptions({ color: p.ma[2] });
+      series.bollUpper.applyOptions({ color: p.boll[0] });
+      series.bollMid.applyOptions({ color: p.boll[1] });
+      series.bollLower.applyOptions({ color: p.boll[2] });
+      series.dif.applyOptions({ color: p.macdLine[0] });
+      series.dea.applyOptions({ color: p.macdLine[1] });
+      series.macd.applyOptions({ color: p.macdHist });
+      series.kdjK.applyOptions({ color: p.kdj[0] });
+      series.kdjD.applyOptions({ color: p.kdj[1] });
+      series.kdjJ.applyOptions({ color: p.kdj[2] });
+    } catch(e){ log('Lightweight Charts 主题切换指标配色异常: ' + e.message, 'err'); }
+    // 成交量/成交额的柱子颜色是按每一根数据单独设置的（不是series级别属性），
+    // 主题切换时要重新setData一遍才能让柱子颜色跟着换过来。
+    if (DATA) loadInitial(state.revealCount);
+  }
+
+  function applyPaneHeights(){
+    if (!chart) return;
+    const container = document.getElementById('pane-lwc');
+    const totalH = (container && container.clientHeight) || 400;
+    const activeSubKeys = Object.keys(PANE_INDEX).filter(k => state.indicators[k]);
+    const n = activeSubKeys.length;
+    const collapsedH = 30;
+    const collapsedCount = Object.keys(PANE_INDEX).length - n;
+    const mainH = Math.max(120, Math.round(totalH * (n === 0 ? 0.88 : 0.48)));
+    const remaining = Math.max(0, totalH - mainH - collapsedCount * collapsedH);
+    const activeH = n > 0 ? Math.floor(remaining / n) : 0;
+    try {
+      const panes = chart.panes();
+      if (panes[0]) panes[0].setHeight(mainH);
+      Object.keys(PANE_INDEX).forEach(key => {
+        const p = panes[PANE_INDEX[key]];
+        if (!p) return;
+        p.setHeight(state.indicators[key] ? Math.max(collapsedH, activeH) : collapsedH);
+      });
+    } catch(e){ log('Lightweight Charts pane高度调整异常: ' + e.message, 'err'); }
+  }
+
+  function applyIndicators(ind){
+    if (!chart) return;
+    try {
+      series.bollUpper.applyOptions({ visible: !!ind.boll });
+      series.bollMid.applyOptions({ visible: !!ind.boll });
+      series.bollLower.applyOptions({ visible: !!ind.boll });
+      series.vol.applyOptions({ visible: !!ind.vol });
+      series.amount.applyOptions({ visible: !!ind.amount });
+      series.dif.applyOptions({ visible: !!ind.macd });
+      series.dea.applyOptions({ visible: !!ind.macd });
+      series.macd.applyOptions({ visible: !!ind.macd });
+      series.kdjK.applyOptions({ visible: !!ind.kdj });
+      series.kdjD.applyOptions({ visible: !!ind.kdj });
+      series.kdjJ.applyOptions({ visible: !!ind.kdj });
+    } catch(e){ log('Lightweight Charts applyIndicators异常: ' + e.message, 'err'); }
+    applyPaneHeights();
+  }
+
+  function dataUpTo(count){
+    const bars = DATA.bars.slice(0, count);
+    const p = seriesColorsFor(state.theme);
+    return {
+      candle: bars.map(b => ({ time: toTime(b.timestamp), open: b.open, high: b.high, low: b.low, close: b.close })),
+      ma5: bars.map((b, i) => DATA.ma5[i] != null ? { time: toTime(b.timestamp), value: DATA.ma5[i] } : null).filter(Boolean),
+      ma10: bars.map((b, i) => DATA.ma10[i] != null ? { time: toTime(b.timestamp), value: DATA.ma10[i] } : null).filter(Boolean),
+      ma30: bars.map((b, i) => DATA.ma30[i] != null ? { time: toTime(b.timestamp), value: DATA.ma30[i] } : null).filter(Boolean),
+      bollUpper: bars.map((b, i) => DATA.bollUpper[i] != null ? { time: toTime(b.timestamp), value: DATA.bollUpper[i] } : null).filter(Boolean),
+      bollMid: bars.map((b, i) => DATA.bollMid[i] != null ? { time: toTime(b.timestamp), value: DATA.bollMid[i] } : null).filter(Boolean),
+      bollLower: bars.map((b, i) => DATA.bollLower[i] != null ? { time: toTime(b.timestamp), value: DATA.bollLower[i] } : null).filter(Boolean),
+      vol: bars.map(b => ({ time: toTime(b.timestamp), value: b.volume, color: b.close >= b.open ? p.up : p.down })),
+      amount: bars.map(b => ({ time: toTime(b.timestamp), value: b.amount, color: b.close >= b.open ? p.up : p.down })),
+      dif: bars.map((b, i) => ({ time: toTime(b.timestamp), value: DATA.dif[i] })),
+      dea: bars.map((b, i) => ({ time: toTime(b.timestamp), value: DATA.dea[i] })),
+      macd: bars.map((b, i) => ({ time: toTime(b.timestamp), value: DATA.macd[i] })),
+      kdjK: bars.map((b, i) => DATA.kdjK[i] != null ? { time: toTime(b.timestamp), value: DATA.kdjK[i] } : null).filter(Boolean),
+      kdjD: bars.map((b, i) => DATA.kdjD[i] != null ? { time: toTime(b.timestamp), value: DATA.kdjD[i] } : null).filter(Boolean),
+      kdjJ: bars.map((b, i) => DATA.kdjJ[i] != null ? { time: toTime(b.timestamp), value: DATA.kdjJ[i] } : null).filter(Boolean)
+    };
+  }
+
+  function loadInitial(count){
+    if (!chart) return;
+    const d = dataUpTo(count);
+    series.candle.setData(d.candle);
+    series.ma5.setData(d.ma5);
+    series.ma10.setData(d.ma10);
+    series.ma30.setData(d.ma30);
+    series.bollUpper.setData(d.bollUpper);
+    series.bollMid.setData(d.bollMid);
+    series.bollLower.setData(d.bollLower);
+    series.vol.setData(d.vol);
+    series.amount.setData(d.amount);
+    series.dif.setData(d.dif);
+    series.dea.setData(d.dea);
+    series.macd.setData(d.macd);
+    series.kdjK.setData(d.kdjK);
+    series.kdjD.setData(d.kdjD);
+    series.kdjJ.setData(d.kdjJ);
+    chart.timeScale().fitContent();
+    applyPaneHeights();
+  }
+
+  function pushOne(index){
+    if (!chart) return;
+    const b = DATA.bars[index];
+    const t = toTime(b.timestamp);
+    const p = seriesColorsFor(state.theme);
+    series.candle.update({ time: t, open: b.open, high: b.high, low: b.low, close: b.close });
+    if (DATA.ma5[index] != null) series.ma5.update({ time: t, value: DATA.ma5[index] });
+    if (DATA.ma10[index] != null) series.ma10.update({ time: t, value: DATA.ma10[index] });
+    if (DATA.ma30[index] != null) series.ma30.update({ time: t, value: DATA.ma30[index] });
+    if (DATA.bollUpper[index] != null) series.bollUpper.update({ time: t, value: DATA.bollUpper[index] });
+    if (DATA.bollMid[index] != null) series.bollMid.update({ time: t, value: DATA.bollMid[index] });
+    if (DATA.bollLower[index] != null) series.bollLower.update({ time: t, value: DATA.bollLower[index] });
+    series.vol.update({ time: t, value: b.volume, color: b.close >= b.open ? p.up : p.down });
+    series.amount.update({ time: t, value: b.amount, color: b.close >= b.open ? p.up : p.down });
+    series.dif.update({ time: t, value: DATA.dif[index] });
+    series.dea.update({ time: t, value: DATA.dea[index] });
+    series.macd.update({ time: t, value: DATA.macd[index] });
+    if (DATA.kdjK[index] != null) series.kdjK.update({ time: t, value: DATA.kdjK[index] });
+    if (DATA.kdjD[index] != null) series.kdjD.update({ time: t, value: DATA.kdjD[index] });
+    if (DATA.kdjJ[index] != null) series.kdjJ.update({ time: t, value: DATA.kdjJ[index] });
+  }
+
+  function popOne(){ loadInitial(state.revealCount); }
+
+  function resize(){
+    if (!chart) return;
+    const container = document.getElementById('pane-lwc');
+    chart.resize(container.clientWidth, container.clientHeight);
+    applyPaneHeights();
+  }
+
+  function destroy(){ if (chart) { chart.remove(); chart = null; series = {}; } }
+
+  return { init, setTheme, loadInitial, pushOne, popOne, resize, destroy, applyIndicators };
+}
+Engines.lwc = createLwcEngine();
+
+// "三方案对比"页签用的三个独立实例，和上面 Engines.* 各自持有完全独立的chart/series闭包，
+// 互不干扰；容器id另外映射（见 compareContainerIdOf），初次切到对比页签时才会真正init。
+const CompareEngines = {
+  kline: createKlineEngine(),
+  echarts: createEchartsEngine(),
+  lwc: createLwcEngine()
+};
+const compareContainerIdOf = { kline: 'pane-compare-kline', echarts: 'pane-compare-echarts', lwc: 'pane-compare-lwc' };
+let compareActivated = false; // 是否已经至少激活过一次对比页签（懒加载，没点过就不用去加载三份库）
+
+/* ============================================================
+   4. 控制层：tab切换 / 下一根 / 主题 / 响应式
+   （不含自动播放——本demo里"下一根"只由用户点击触发）
+   ============================================================ */
+
+function currentEngine(){ return state.engine === 'compare' ? compareEngineFacade() : Engines[state.engine]; }
+
+function updateCounters(){
+  $('remainCount').textContent = state.total - state.revealCount;
+  $('totalCount').textContent = state.total;
+  $('shownCount').textContent = state.revealCount;
+  $('nextBtn').disabled = state.revealCount >= state.total;
+  $('prevBtn').disabled = state.revealCount <= 1;
+}
+
+/** 激活某个引擎的图表：确保库已加载（多镜像重试），成功后才 init + 铺初始数据；
+ *  加载失败时 ensureLib 已经把错误原因显示在对应pane里了，这里不再二次报错。 */
+async function activateEngine(engineKey){
+  if (engineKey === 'compare') return activateCompareView();
+  const pane = $(paneIdOf[engineKey]);
+  const ok = await ensureLib(engineKey);
+  if (!ok) return;
+  if (state.engine !== engineKey) return; // 用户已经切走了，别再往旧tab上画
+  clearPaneStatus(engineKey);
+  try {
+    // 真实bug记录（2026-08-15 用户实机发现）：这里之前直接调 init()，没有先 destroy() 掉
+    // 这个引擎上一次的chart实例。切走某个tab时旧chart并不会被清理（只是CSS隐藏），
+    // 用户再切回来时会在同一个容器里重新init一个新chart——klinecharts/Lightweight Charts
+    // 都会在容器里叠加出一整套新的canvas/pane，反复切换几次tab后同一个方案里的副图会
+    // 一层叠一层重复显示、主图区域被挤没了。ECharts因为echarts.init()对同一个DOM节点
+    // 会复用已有实例（不会重复创建），所以表现"看起来没事"，容易让人误以为只有klinecharts有问题，
+    // 实际是三个引擎通用的生命周期管理疏漏。修复方式：每次激活前先无条件destroy()一次
+    // （destroy()本身对"从未初始化过"的情况是安全的空操作）。
+    try { Engines[engineKey].destroy(); } catch(eDestroy){ log(`[${engineKey}] 切换前destroy异常（不影响继续初始化）: ${eDestroy.message}`, 'err'); }
+    Engines[engineKey].init(pane, state.theme);
+    Engines[engineKey].loadInitial(state.revealCount);
+    try { Engines[engineKey].applyIndicators(state.indicators); } catch(e2){ log(`[${engineKey}] applyIndicators异常: ${e2.message}`, 'err'); }
+    log(`[${engineKey}] 渲染完成，当前显示 ${state.revealCount} 根`, 'ok');
+  } catch(e){
+    log(`[${engineKey}] 初始化异常: ${e.message}`, 'err');
+    console.error(e);
+    setPaneStatus(engineKey, `<div class="status-inner">⚠️ ${engineLabels[engineKey]} 库加载成功，但初始化时报错：<br/><code style="font-size:11px;">${e.message}</code><br/>这通常是库版本升级后API签名变了，把这行报错发给开发者定位。</div>`, true);
+  }
+}
+
+/** "三方案对比"页签：三个引擎各自独立加载+渲染到自己的小格子里，互不阻塞——
+ *  某一个库加载慢或加载失败，不影响另外两个正常显示（用Promise.all并发加载，
+ *  每个引擎单独try/catch，坏一个不连累其它两个）。 */
+async function activateCompareView(){
+  const keys = ['kline', 'echarts', 'lwc'];
+  await Promise.all(keys.map(async (key) => {
+    const ok = await ensureLib(key);
+    if (!ok) return; // 失败原因ensureLib已经通过setPaneStatus显示在对应小格子里了
+    if (state.engine !== 'compare') return; // 用户已经切走对比页签了，别再画
+    const container = document.getElementById(compareContainerIdOf[key]);
+    if (!container) return;
+    clearPaneStatus(key);
+    try {
+      try { CompareEngines[key].destroy(); } catch(eDestroy){}
+      CompareEngines[key].init(container, state.theme);
+      CompareEngines[key].loadInitial(state.revealCount);
+      try { CompareEngines[key].applyIndicators(state.indicators); } catch(e2){ log(`[compare:${key}] applyIndicators异常: ${e2.message}`, 'err'); }
+      log(`[compare:${key}] 渲染完成，当前显示 ${state.revealCount} 根`, 'ok');
+    } catch(e){
+      log(`[compare:${key}] 初始化异常: ${e.message}`, 'err');
+      console.error(e);
+      setPaneStatus(key, `<div class="status-inner">⚠️ ${engineLabels[key]} 初始化时报错：<br/><code style="font-size:11px;">${e.message}</code></div>`, true);
+    }
+  }));
+}
+
+/** 兼容 nextBar/prevBar/toggleIndicator/resize 等既有代码：对比页签下，"当前引擎"
+ *  不是单一个chart，而是要把同一个操作同时广播给三个独立实例，任何一个出错不影响其它两个。 */
+function compareEngineFacade(){
+  return {
+    loadInitial(count){ Object.values(CompareEngines).forEach(eng => { try { eng.loadInitial(count); } catch(e){} }); },
+    pushOne(index){ Object.entries(CompareEngines).forEach(([key, eng]) => { try { eng.pushOne(index); } catch(e){ log(`[compare:${key}] pushOne异常: ${e.message}`, 'err'); } }); },
+    popOne(){ Object.entries(CompareEngines).forEach(([key, eng]) => { try { eng.popOne(); } catch(e){ log(`[compare:${key}] popOne异常: ${e.message}`, 'err'); } }); },
+    resize(){ Object.values(CompareEngines).forEach(eng => { try { eng.resize(); } catch(e){} }); },
+    destroy(){ Object.values(CompareEngines).forEach(eng => { try { eng.destroy(); } catch(e){} }); },
+    applyIndicators(ind){ Object.entries(CompareEngines).forEach(([key, eng]) => { try { eng.applyIndicators(ind); } catch(e){ log(`[compare:${key}] applyIndicators异常: ${e.message}`, 'err'); } }); },
+    setTheme(theme){ Object.values(CompareEngines).forEach(eng => { try { eng.setTheme(theme); } catch(e){} }); }
+  };
+}
+
+function switchTab(engineKey){
+  if (state.engine === engineKey) return;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.engine === engineKey));
+  document.querySelectorAll('.engine-pane').forEach(p => p.classList.remove('active'));
+  state.engine = engineKey;
+  $(paneIdOf[engineKey]).classList.add('active');
+  // 技术验证结论卡片只在"三方案对比"页签下显示，其它三个方案页签下面不出现
+  $('findingsCard').classList.toggle('active', engineKey === 'compare');
+  log(`切换到方案：${engineLabels[engineKey]}`);
+  activateEngine(engineKey);
+}
+
+function initAllData(regenerate){
+  state.total = Math.max(5, parseInt($('totalBars').value, 10) || 300);
+  state.initial = Math.min(state.total, Math.max(1, parseInt($('initialBars').value, 10) || 220));
+  state.revealCount = state.initial;
+  if (regenerate || !DATA) {
+    state.seed = regenerate ? (Date.now() % 1e9) : state.seed;
+    DATA = buildData(state.total, state.seed);
+    log(`生成模拟数据：${state.total} 根日线（seed=${state.seed}）`);
+  }
+  updateCounters();
+}
+
+function reloadCurrentEngine(){
+  try { currentEngine().destroy(); } catch(e){}
+  activateEngine(state.engine);
+  updateCounters();
+}
+
+function nextBar(){
+  if (state.revealCount >= state.total) return;
+  try {
+    currentEngine().pushOne(state.revealCount);
+  } catch(e){
+    log(`[${state.engine}] pushOne异常: ${e.message}`, 'err');
+    console.error(e);
+  }
+  state.revealCount++;
+  updateCounters();
+}
+
+function prevBar(){
+  if (state.revealCount <= 1) return;
+  state.revealCount--;
+  try {
+    currentEngine().popOne();
+  } catch(e){
+    log(`[${state.engine}] popOne异常: ${e.message}`, 'err');
+  }
+  updateCounters();
+}
+
+function updateDataSourceChip(){
+  const chip = $('dataSourceChip');
+  chip.textContent = state.dataSource === 'simulated'
+    ? '数据来源：模拟数据'
+    : `数据来源：真实历史数据 · ${state.dataSource.split(':')[1]}`;
+}
+
+function updateViewportBadge(){
+  const w = window.innerWidth;
+  let label = '桌面端';
+  if (w < 640) label = '手机端';
+  else if (w < 1024) label = '平板端';
+  $('viewportBadge').textContent = `${label} · ${w}px`;
+}
+
+function renderIndicatorToggles(){
+  const wrap = $('indicatorToggles');
+  wrap.innerHTML = '';
+  Object.keys(INDICATOR_META).forEach(key => {
+    const meta = INDICATOR_META[key];
+    const btn = document.createElement('button');
+    btn.className = 'chip-toggle' + (state.indicators[key] ? ' on' : '');
+    btn.textContent = (state.indicators[key] ? '✓ ' : '') + meta.label;
+    btn.addEventListener('click', () => toggleIndicator(key));
+    wrap.appendChild(btn);
+  });
+}
+
+function toggleIndicator(key){
+  state.indicators[key] = !state.indicators[key];
+  renderIndicatorToggles();
+  try {
+    currentEngine().applyIndicators(state.indicators);
+    log(`[${state.engine}] 指标"${INDICATOR_META[key].label}"切换为${state.indicators[key] ? '显示' : '隐藏'}`);
+  } catch(e){
+    log(`[${state.engine}] applyIndicators异常: ${e.message}`, 'err');
+    console.error(e);
+  }
+}
+
+/* ---------- 事件绑定 ---------- */
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.engine));
+});
+
+// 三个主题循环切换：通达信黑底 → 黑夜模式 → 明亮模式 → 通达信黑底 ...
+const THEME_ORDER = ['tdx', 'dark', 'light'];
+const THEME_BTN_LABEL = { tdx: '🌙 切换黑夜模式', dark: '☀️ 切换明亮模式', light: '📈 切换通达信配色' };
+$('themeToggle').addEventListener('click', () => {
+  const idx = THEME_ORDER.indexOf(state.theme);
+  state.theme = THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+  document.documentElement.setAttribute('data-theme', state.theme);
+  $('themeToggle').textContent = THEME_BTN_LABEL[state.theme];
+  // 主tab的三个单例 + 对比页签的三个独立实例都要同步换主题（哪怕对比页签还没被激活过也没关系，
+  // 每个引擎的setTheme在chart还没init时都是安全的空操作）。
+  [...Object.values(Engines), ...Object.values(CompareEngines)].forEach(eng => { try { eng.setTheme(state.theme); } catch(e){} });
+  log(`主题切换为：${state.theme}`);
+});
+
+$('regenBtn').addEventListener('click', () => {
+  state.dataSource = 'simulated';
+  updateDataSourceChip();
+  initAllData(true);
+  reloadCurrentEngine();
+});
+
+$('realDataBtn').addEventListener('click', async () => {
+  const btn = $('realDataBtn');
+  const symbol = 'aapl.us'; // 演示用固定标的；真实项目里应替换成你们自己的行情源接口
+  const count = Math.max(30, parseInt($('totalBars').value, 10) || 300);
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = '⏳ 正在拉取 ' + symbol + ' 历史数据…';
+  log(`尝试从 stooq.com 拉取真实历史数据（${symbol}，目标 ${count} 根）…`);
+  try {
+    const bars = await fetchRealHistoricalData(symbol, count);
+    DATA = buildDataFromBars(bars);
+    state.total = bars.length;
+    state.initial = Math.min(state.total, Math.max(1, parseInt($('initialBars').value, 10) || 220));
+    state.revealCount = state.initial;
+    state.dataSource = 'real:' + symbol.toUpperCase();
+    updateDataSourceChip();
+    updateCounters();
+    log(`真实历史数据获取成功：共 ${bars.length} 根，最早 ${new Date(bars[0].timestamp).toISOString().slice(0,10)} ~ 最新 ${new Date(bars[bars.length-1].timestamp).toISOString().slice(0,10)}`, 'ok');
+    reloadCurrentEngine();
+  } catch (e) {
+    log(`真实历史数据获取失败：${e.message}——已保留当前模拟数据，不影响demo继续使用`, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
+});
+
+$('resetBtn').addEventListener('click', () => {
+  state.revealCount = state.initial;
+  reloadCurrentEngine();
+});
+
+$('nextBtn').addEventListener('click', nextBar);
+$('prevBtn').addEventListener('click', prevBar);
+
+let resizeRAF = null;
+window.addEventListener('resize', () => {
+  updateViewportBadge();
+  if (resizeRAF) cancelAnimationFrame(resizeRAF);
+  resizeRAF = requestAnimationFrame(() => {
+    try { currentEngine().resize(); } catch(e){}
+  });
+});
+
+/* ---------- 启动 ---------- */
+
+updateViewportBadge();
+updateDataSourceChip();
+renderIndicatorToggles();
+initAllData(false);
+activateEngine('kline');
+</script>
+</body>
+</html>
